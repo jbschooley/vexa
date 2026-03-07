@@ -24,6 +24,15 @@ export async function leaveZoomWebMeeting(
   }
 
   try {
+    // Move mouse to bottom-center of viewport to reveal the auto-hiding footer toolbar
+    try {
+      const viewport = page.viewportSize();
+      if (viewport) {
+        await page.mouse.move(viewport.width / 2, viewport.height - 10);
+        await page.waitForTimeout(800);
+      }
+    } catch { /* non-fatal */ }
+
     // Click Leave button
     const leaveBtn = page.locator(zoomLeaveButtonSelector).first();
     const visible = await leaveBtn.isVisible({ timeout: 3000 });
@@ -41,7 +50,9 @@ export async function leaveZoomWebMeeting(
         }
       } catch { /* no confirmation dialog */ }
     } else {
-      log('[Zoom Web] Leave button not visible — meeting may have already ended');
+      log('[Zoom Web] Leave button not visible after footer reveal — forcing page navigation');
+      // Fallback: navigate away to force-disconnect from the meeting
+      await page.goto('about:blank').catch(() => {});
     }
     return true;
   } catch (e: any) {
