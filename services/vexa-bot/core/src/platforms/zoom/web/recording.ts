@@ -20,6 +20,8 @@ let lastActiveSpeaker: string | null = null;
 let activeBotConfig: BotConfig | null = null;
 let connectWhisperFn: ((cfg: BotConfig) => Promise<void>) | null = null;
 let isReconfiguring = false;
+let lastTranscriptTime: number | null = null;
+const SPEAKER_SILENCE_THRESHOLD_MS = 60_000;
 
 export async function startZoomWebRecording(page: Page | null, botConfig: BotConfig): Promise<void> {
   if (!page) throw new Error('[Zoom Web] Page required for recording');
@@ -46,7 +48,10 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
               const texts = (data.segments as any[])
                 .filter((s: any) => s.completed && s.text)
                 .map((s: any) => s.text as string);
-              if (texts.length > 0) log(`[Zoom Web] Transcript: ${texts.join(' ').trim()}`);
+              if (texts.length > 0) {
+                log(`[Zoom Web] Transcript: ${texts.join(' ').trim()}`);
+                lastTranscriptTime = Date.now();
+              }
             }
           },
           (err: Event) => {
@@ -124,6 +129,7 @@ export async function stopZoomWebRecording(): Promise<void> {
 
   audioSessionStartTime = null;
   lastActiveSpeaker = null;
+  lastTranscriptTime = null;
 
   // Unblock the blocking wait
   if (recordingStopResolver) {
@@ -317,6 +323,7 @@ function startSpeakerPolling(page: Page, botConfig: BotConfig): void {
           log(`🔇 [Zoom Web] SPEAKER_END: ${lastActiveSpeaker}`);
         }
         lastActiveSpeaker = speakerName;
+        lastTranscriptTime = null;
         if (whisperLive) {
           whisperLive.sendSpeakerEvent('SPEAKER_START', speakerName, speakerName, relativeMs, cfg);
           log(`🎤 [Zoom Web] SPEAKER_START: ${speakerName}`);
@@ -328,6 +335,22 @@ function startSpeakerPolling(page: Page, botConfig: BotConfig): void {
           log(`🔇 [Zoom Web] SPEAKER_END: ${lastActiveSpeaker}`);
         }
         lastActiveSpeaker = null;
+        lastTranscriptTime = null;
+      } else if (lastActiveSpeaker && lastTranscriptTime !== null &&
+                 Date.now() - lastTranscriptTime > SPEAKER_SILENCE_THRESHOLD_MS) {
+        // Same speaker shown active in DOM but no transcript for > 1 min — they went silent.
+        // Force a segment boundary now: SPEAKER_END + immediate SPEAKER_START.
+        // Sending SPEAKER_START right away (before any audio arrives) ensures the next
+        // transcript is attributed correctly instead of showing as "unknown".
+        if (whisperLive) {
+          whisperLive.sendSpeakerEvent('SPEAKER_END', lastActiveSpeaker, lastActiveSpeaker, relativeMs, cfg);
+          log(`🔇 [Zoom Web] SPEAKER_END (silent > 1min): ${lastActiveSpeaker}`);
+          // +1ms ensures SPEAKER_START score is strictly greater than SPEAKER_END in the Redis
+          // sorted set, so it's always processed after the END and won't be removed by it.
+          whisperLive.sendSpeakerEvent('SPEAKER_START', lastActiveSpeaker, lastActiveSpeaker, relativeMs + 1, cfg);
+          log(`🎤 [Zoom Web] SPEAKER_START (new segment after silence): ${lastActiveSpeaker}`);
+        }
+        lastTranscriptTime = Date.now(); // reset so we don't re-trigger next poll
       }
     } catch {
       // Page may be navigating — ignore
