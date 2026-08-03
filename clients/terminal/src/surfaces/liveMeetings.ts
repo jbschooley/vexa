@@ -292,7 +292,13 @@ export async function fetchDurableTranscript(meetingId: string): Promise<Durable
     const list = body.segments || [];
     const lines = list
       .filter((s) => (s.text ?? "").trim())
-      .map((s) => ({ t: formatTranscriptTime(s.start), speaker: s.speaker || "Speaker", text: s.text ?? "" }));
+      .map((s) => ({
+        t: formatTranscriptTime(s.start),
+        // The raw numeric offset (relative seconds from recording start) — the media clock the
+        // transcript↔player sync seeks on. `t` above is only the display string; keep the number too.
+        startSec: typeof s.start === "number" && Number.isFinite(s.start) ? s.start : undefined,
+        speaker: s.speaker || "Speaker", text: s.text ?? "",
+      }));
     return { lines, notes: processedNotesOf(body) };
   } catch {
     return EMPTY_DURABLE;

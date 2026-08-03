@@ -1,8 +1,9 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { CanvasActionsProvider, useActions, OPEN_ENTITY_EVENT } from "./actions";
 import { MeetingHealthBanner } from "./MeetingHealthBanner";
 import { LiveTranscriptEngine, type EngineActions, type EngineEntity, type EngineSignal } from "./LiveTranscriptEngine";
+import { PlaybackSyncProvider } from "./playbackSync";
 import { RecordingPlayer } from "./RecordingPlayer";
 import { useMeetingNotes } from "./notes";
 import { deriveProcessingView } from "./processingView";
@@ -12,9 +13,9 @@ export const MEETING_CANVAS_CONTENT_INSET = 18;
 
 /** ONE render engine for both modes (P23: the terminal RENDERS, it does not re-derive). The toggle picks
  *  the SOURCE — raw segments vs the cleaned processed mirror — not a different renderer. */
-function RawTranscript() {
+function RawTranscript({ live }: { live?: boolean }) {
   const { transcript } = useMeeting();
-  return <LiveTranscriptEngine segments={transcript.segments} />;
+  return <LiveTranscriptEngine segments={transcript.segments} live={live} />;
 }
 
 // Map a copilot signal's loose context/kind onto the badge taxonomy (decision / action-item /
@@ -30,7 +31,7 @@ function signalKind(raw: string | undefined): string {
 
 /** PROCESSED v2 = the cleaned mirror with INLINE entity highlights (clickable → research / open entity
  *  doc) and actionable copilot SIGNAL badges, all through the SAME engine. */
-function ProcessedTranscript() {
+function ProcessedTranscript({ live }: { live?: boolean }) {
   const notes = useMeetingNotes();
   const entityItems = useEntities();
   const signalItems = useSignals();
@@ -60,6 +61,7 @@ function ProcessedTranscript() {
   return (
     <LiveTranscriptEngine
       segments={segments}
+      live={live}
       emptyLabel="Processing transcript…"
       entities={entities}
       signals={signals}
@@ -70,6 +72,7 @@ function ProcessedTranscript() {
 
 function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
   const { meeting, transcript } = useMeeting();
+  const scrollerRef = useRef<HTMLElement>(null);
   const live = meeting.live === true;
   const hasNotes = (transcript.notes?.length ?? 0) > 0;
   // Durable truth wins over a stale list `live` flag ([N8] — the row can stay stuck on a live
@@ -82,6 +85,11 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
   // meeting state — pass BOTH to /api/meeting/process so it keys the copilot on the row id (leak-safe)
   // while naming the kg doc by the native.
   const nativeId = meeting.nativeId;
+
+  // Recording audio/video toggle — lifted here so it sits on the same row as the raw/processed control.
+  // `tracks` is reported up by RecordingPlayer once it resolves; the toggle shows only when BOTH exist.
+  const [preferAudio, setPreferAudio] = useState(false);
+  const [tracks, setTracks] = useState<{ hasVideo: boolean; hasAudio: boolean }>({ hasVideo: false, hasAudio: false });
 
   // null = untouched → follow the default (which can flip once the durable notes hydrate).
   const [override, setOverride] = useState<boolean | null>(null);
@@ -125,18 +133,35 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
           {label}
         </button>
         <span style={{ fontSize: 11.5, color: "var(--t3)" }}>{processing ? "cleaned + copilot" : "raw transcript"}</span>
+        {durableTerminal && tracks.hasVideo && tracks.hasAudio && (
+          <button
+            type="button"
+            onClick={() => setPreferAudio((p) => !p)}
+            title={preferAudio ? "Show the video recording" : "Play the audio-only recording"}
+            style={{
+              marginLeft: "auto", cursor: "pointer", background: "transparent", color: "var(--t2)",
+              border: "1px solid var(--line2)", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 600,
+            }}
+          >
+            {preferAudio ? "Show video" : "Audio only"}
+          </button>
+        )}
       </div>
       <MeetingHealthBanner />
-      <main style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+      <PlaybackSyncProvider scrollerRef={scrollerRef}>
+        {/* The player sits ABOVE the scroller (flex:none) so it stays put while the transcript scrolls;
+            it's still inside the provider so it can register its seek handler for the transcript. */}
         {durableTerminal && (
-          <div style={{ padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px` }}>
-            <RecordingPlayer meetingId={meetingId} />
+          <div style={{ flex: "none", padding: `4px ${MEETING_CANVAS_CONTENT_INSET}px 0` }}>
+            <RecordingPlayer meetingId={meetingId} preferAudio={preferAudio} onTracks={setTracks} />
           </div>
         )}
-        <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
-          {processing ? <ProcessedTranscript /> : <RawTranscript />}
-        </div>
-      </main>
+        <main ref={scrollerRef} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+          <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
+            {processing ? <ProcessedTranscript live={effectiveLive} /> : <RawTranscript live={effectiveLive} />}
+          </div>
+        </main>
+      </PlaybackSyncProvider>
     </div>
   );
 }

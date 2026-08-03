@@ -1,7 +1,7 @@
 "use client";
 import { createContext, createElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLiveMeetings, fetchDurableTranscript, mergeNotesById, type DurableTranscript } from "../surfaces/liveMeetings";
-import { meetingEntities, type MeetingMock, type TranscriptLine } from "../surfaces/meetingModel";
+import { meetingEntities, type MeetingMock } from "../surfaces/meetingModel";
 import { useMeetingLive } from "../surfaces/meetingLive";
 import { useCanvasActionState } from "./actions";
 import { cleanTranscriptText, extractNotableNumbers } from "./textSignals";
@@ -79,10 +79,6 @@ function cardKindFromText(text: string, fallback = "insight"): string {
   if (lower.includes("next step") || lower.includes("follow-up") || lower.includes("follow up")) return "next-step";
   if (lower.includes("action") || lower.includes("task")) return "action";
   return fallback;
-}
-
-function lineTs(line: TranscriptLine): string | undefined {
-  return line.t || undefined;
 }
 
 function safeArray<T>(value: T[] | null | undefined): T[] {
@@ -365,8 +361,20 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       docs: safeArray(selected.docs),
     };
     const liveSegments = safeArray(live.transcript).map((s) => ({ id: s.id, speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.t, tsMs: s.tsMs, completed: s.completed }));
-    const recordedSegments = safeArray(durable.lines).map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
-    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: lineTs(s) }));
+    // `ts` MUST be the numeric relative-seconds offset (the media clock the player seeks on). A durable
+    // line's `startSec` is an ABSOLUTE epoch (seconds) — the DB's start_time — so anchor every line to the
+    // EARLIEST one, mapping the transcript onto the recording's 0..duration timeline. (Using the display
+    // string, or the raw epoch, made every line resolve to one huge/constant time.)
+    const durableLines = safeArray(durable.lines);
+    // Anchor to the EARLIEST line: the video master's recording starts at ~the first transcript segment
+    // (verified: end_time − duration ≈ first-segment epoch), NOT at meeting.start_time (which is a couple
+    // seconds earlier and made the recording read ahead of the transcript). Segment `startSec` is an
+    // absolute epoch, so subtracting the earliest maps the transcript onto the recording's 0..duration.
+    const recAnchorSec = durableLines.reduce<number>((m, l) => (typeof l.startSec === "number" ? Math.min(m, l.startSec) : m), Infinity);
+    const relSec = (startSec?: number): number | undefined =>
+      Number.isFinite(recAnchorSec) && typeof startSec === "number" ? Math.max(0, startSec - recAnchorSec) : undefined;
+    const recordedSegments = durableLines.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: relSec(s.startSec) }));
+    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: relSec(s.startSec) }));
     const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
     const copilotCards = safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: cleanTranscriptText(c.title), body: c.body ? cleanTranscriptText(c.body) : c.body }));
     const diagnostics = {
