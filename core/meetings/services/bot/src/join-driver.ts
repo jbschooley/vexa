@@ -88,7 +88,7 @@ export function createBrowserJoinDriver(page: Page, inv: Invocation): JoinDriver
     },
     onRemoval(cb) {
       if (platform === 'teams') return startTeamsRemovalMonitor(page, cb);
-      if (platform === 'zoom')  return startZoomRemovalMonitor(page, cb);
+      if (platform === 'zoom')  return startZoomRemovalMonitor(page, cb, inv);
       if (platform === 'jitsi') return startJitsiRemovalMonitor(page, cb);
       return startGoogleRemovalMonitor(page, cb);
     },
