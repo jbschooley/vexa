@@ -15,11 +15,17 @@ import json
 import os
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from .ports import RecordingRepo, Storage
-from .service import SessionNotFound, _verify_meeting_token, finalize_master, upload_chunk
+from .service import (
+    SessionNotFound,
+    _verify_meeting_token,
+    finalize_combined_master,
+    finalize_master,
+    upload_chunk,
+)
 
 
 def _bearer_token(authorization: Optional[str]) -> str:
@@ -115,6 +121,7 @@ def build_router(
 
     @router.post("/internal/recordings/upload", include_in_schema=False)
     async def internal_upload_recording(
+        background_tasks: BackgroundTasks,
         file: UploadFile = File(...),
         session_uid: Optional[str] = Form(None),
         media_type: Optional[str] = Form(None),
@@ -171,6 +178,15 @@ def build_router(
             )
         except SessionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e))
+        # Recording finalized (this media type's last chunk) → build the muxed audio+video master
+        # eagerly, after responding, so it is ready before playback. Idempotent + cached, and a
+        # no-op until BOTH audio and video masters exist — so it runs harmlessly on whichever of the
+        # two finalizes first, and actually muxes when the second one lands.
+        if is_final and receipt.get("meeting_id") is not None and receipt.get("recording_id") is not None:
+            background_tasks.add_task(
+                finalize_combined_master, repo, storage,
+                meeting_id=receipt["meeting_id"], recording_id=receipt["recording_id"],
+            )
         return JSONResponse(content=receipt)
 
     @router.get("/recordings")
@@ -216,6 +232,11 @@ def build_router(
         )
         if master_key is None:
             raise HTTPException(status_code=404, detail="No such media file to finalize")
+        # Re-resolve the media-file AFTER finalize — for type=combined the media_file is CREATED during
+        # finalize (it has no chunks of its own), so the pre-finalize lookup above is stale (None).
+        recs = await repo.list_meeting_recordings(user_id)
+        rec = next((r for r in recs if r.get("id") == recording_id), rec)
+        mf = next((m for m in rec.get("media_files", []) if m.get("type") == type), mf)
         # The dashboard player (api.ts getRecordingMasterStreamUrl) reads ``raw_url`` and streams it via
         # the proxy — the master metadata (``storage_path``) alone is not playable. Point it at the byte
         # route below so playback actually resolves (recordings P3: master byte stream).
@@ -280,6 +301,8 @@ def build_router(
             content_type = "audio/wav"
         elif media_format == "webm":
             content_type = "audio/webm" if mf.get("type") == "audio" else "video/webm"
+        elif media_format == "mp4":
+            content_type = "video/mp4"
         else:
             content_type = "application/octet-stream"
 

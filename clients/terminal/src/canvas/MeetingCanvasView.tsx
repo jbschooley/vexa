@@ -3,6 +3,7 @@ import { useState } from "react";
 import { CanvasActionsProvider, useActions, OPEN_ENTITY_EVENT } from "./actions";
 import { MeetingHealthBanner } from "./MeetingHealthBanner";
 import { LiveTranscriptEngine, type EngineActions, type EngineEntity, type EngineSignal } from "./LiveTranscriptEngine";
+import { RecordingPlayer } from "./RecordingPlayer";
 import { useMeetingNotes } from "./notes";
 import { deriveProcessingView } from "./processingView";
 import { MeetingScopeProvider, MeetingSourceProvider, useEntities, useMeeting, useSignals } from "./useMeeting";
@@ -127,6 +128,11 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
       </div>
       <MeetingHealthBanner />
       <main style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        {durableTerminal && (
+          <div style={{ padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px` }}>
+            <RecordingPlayer meetingId={meetingId} />
+          </div>
+        )}
         <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
           {processing ? <ProcessedTranscript /> : <RawTranscript />}
         </div>

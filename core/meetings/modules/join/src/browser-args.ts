@@ -56,7 +56,12 @@ export const JOIN_BROWSER_ARGS: readonly string[] = [
   "--start-fullscreen",
   "--incognito",
   "--no-sandbox",
-  "--disable-setuid-sandbox",
+  // --test-type suppresses Chromium's "You are using an unsupported command-line flag: --no-sandbox"
+  // yellow banner, which otherwise overlays the server-side video recording. --disable-infobars does
+  // NOT hide this particular banner. (The old --disable-setuid-sandbox was redundant with --no-sandbox
+  // — which already disables all sandboxing — and only added a second flag to that same banner, so it
+  // was dropped.) --test-type is a mild automation signal; verified the Zoom/Meet join still admits.
+  "--test-type",
   "--disable-features=IsolateOrigins,site-per-process",
   "--disable-infobars",
   "--disable-gpu",
