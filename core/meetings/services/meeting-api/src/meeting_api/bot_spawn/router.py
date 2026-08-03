@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -229,8 +229,16 @@ def _passcode_from_url(meeting_url: str) -> Optional[str]:
     return None
 
 
-def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
-    """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` ports."""
+def build_router(
+    repo: MeetingRepo,
+    runtime: RuntimeClient,
+    *,
+    transcript_stream_purge: "Optional[Callable[[int], Awaitable[None]]]" = None,
+) -> APIRouter:
+    """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` ports.
+
+    ``transcript_stream_purge`` (redis-backed in prod, None offline) clears a fresh meeting's transcript
+    stream so it never inherits a reused row id's stale data — see ``request_bot``."""
     router = APIRouter()
 
     @router.post("/bots", status_code=201)
@@ -402,6 +410,7 @@ def build_router(repo: MeetingRepo, runtime: RuntimeClient) -> APIRouter:
                 webhook_url=x_user_webhook_url,
                 webhook_secret=x_user_webhook_secret,
                 webhook_events=webhook_events,
+                transcript_stream_purge=transcript_stream_purge,
             )
         except TranscriptionNotConfigured as e:
             raise HTTPException(status_code=503, detail=str(e))
