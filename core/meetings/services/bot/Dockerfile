@@ -106,6 +106,13 @@ FROM vexa/meet-join-env:dev AS runtime
 # it back on clean teardown; without the binary every authenticated spawn fails
 # at session-restore. The Playwright + humanized-X11 stack (xvfb·xdotool·xclip·
 # x11vnc·websockify) comes from the base.
+#
+# ffmpeg + VA-API drivers power server-side video recording (@vexa/recording's
+# VideoRecordingService spawns `ffmpeg -f x11grab` against the Xvfb display). ffmpeg
+# is required for ANY video capture; the VA-API libs (libva*/va-driver-all) enable
+# VIDEO_HWACCEL=vaapi (Intel iGPU / AMD, needs /dev/dri passthrough). NVENC
+# (VIDEO_HWACCEL=nvenc) needs no image package — it rides the nvidia container
+# runtime. With neither hwaccel set the bot encodes software VP9/webm (ffmpeg only).
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -113,8 +120,22 @@ RUN export DEBIAN_FRONTEND=noninteractive \
        fluxbox \
        socat \
        awscli \
+       ffmpeg \
+       libva-drm2 \
+       libva-x11-2 \
+       va-driver-all \
     && rm -rf /var/lib/apt/lists/* \
     && aws --version
+
+# Best-effort Intel Gen8+ media VA-API driver (non-free component; the base image may
+# lack the non-free repo keys, hence --allow-unauthenticated, matching the original
+# feature/video-recording image). VA-API still works via va-driver-all without it —
+# this only widens Intel GPU coverage, so never fail the build if it can't install.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update \
+    && (apt-get install -y --no-install-recommends --allow-unauthenticated intel-media-va-driver-non-free 2>/dev/null \
+        || echo "[runtime] intel-media-va-driver-non-free unavailable — VA-API still works via va-driver-all") \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     DISPLAY=:99 \

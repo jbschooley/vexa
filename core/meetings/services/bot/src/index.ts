@@ -34,6 +34,7 @@ import { createBotPipeline, createLivePipeline, createTranscribe, serr, type Bot
 import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, wrapTranscribeWithTap, type CaptureSignalRecorder } from './telemetry.js';
 import { createSttFaultReporter } from './stt-faults.js';
+import { startVideoRecording, wantsVideoCapture } from './video-recording.js';
 import { launchBrowser, startCaptureBridge, startRecording, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
@@ -250,6 +251,11 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     pipeline = createLivePipeline({
       startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat, remoteAudioActivity),   // on the live meeting page
       startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
+      // Server-side x11grab video capture (separate from the browser audio tap). Runs inside the
+      // seam so it starts post-admission — on the live meeting, not the pre-join page.
+      startVideoRecording: wantsVideoCapture(inv)
+        ? async () => startVideoRecording(inv, (m) => console.log(`[bot] ${m}`))
+        : undefined,
       engine: bp,
       onFault: (stage, e) => {
         console.error(`[bot] live-pipeline: ${stage} failed (non-fatal, bot stays seated): ${serr(e)}`);
@@ -294,7 +300,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     return result.exitCode;
   } finally {
     releaseSignals();
-    // Tear down the pipeline (capture bridge + recording + engine) + browser (best-effort — a
+    // Tear down the pipeline (capture bridge + recording + video + engine) + browser (best-effort — a
     // teardown failure must not change the exit code). The orchestrator already stopped the pipeline
     // on a normal end; createLivePipeline.stop() is idempotent, and this also covers an early-exit
     // path that skipped the orchestrator's teardown. (#593)

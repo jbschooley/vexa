@@ -208,6 +208,20 @@
    ]
   },
   {
+   "key": "VIDEO_HWACCEL",
+   "class": "defaulted",
+   "default": "none",
+   "description": "video-recording encoder selection forwarded to the spawned bot (extra_env): none → software VP9/webm; vaapi → Intel/AMD VA-API h264/mp4 (needs /dev/dri passthrough); nvenc → NVIDIA NVENC h264/mp4 (needs the nvidia runtime). Only forwarded to the bot when set; unset ⇒ the bot's software default",
+   "targets": []
+  },
+  {
+   "key": "ENCODE_H264",
+   "class": "defaulted",
+   "default": "(unset — software VP9/webm)",
+   "description": "when 'true' and VIDEO_HWACCEL=none, the spawned bot encodes CPU H.264/mp4 (Safari-compatible) instead of VP9/webm; forwarded to the bot via extra_env only when set",
+   "targets": []
+  },
+  {
    "key": "MINIO_ENDPOINT",
    "class": "defaulted",
    "default": "minio:9000",

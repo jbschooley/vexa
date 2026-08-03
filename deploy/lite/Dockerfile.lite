@@ -101,6 +101,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       supervisor postgresql-client \
       xvfb fluxbox x11vnc novnc python3-websockify \
       pulseaudio xdotool xclip socat ffmpeg libsndfile1 \
+      libva-drm2 libva-x11-2 va-driver-all \
       curl git ca-certificates \
  && usermod -aG pulse-access root 2>/dev/null || true \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
