@@ -15,8 +15,12 @@ golden-locked — this module only orchestrates the IO + the JSONB bookkeeping a
 """
 from __future__ import annotations
 
+import asyncio
+import os
+import subprocess
+import tempfile
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ..obs import log_event
 from ..recording_codec import build_recording_master
@@ -24,7 +28,8 @@ from .jsonb import apply_chunk_to_recording, chunk_storage_key, master_storage_k
 from .ports import RecordingRepo, Storage
 
 # Media content types (parent ``recording_codec._media_content_type``, reduced to the core set).
-_CONTENT_TYPES = {"webm": "video/webm", "wav": "audio/wav"}
+# mp4 supports the muxed "combined" master when the video was encoded h264 (VIDEO_HWACCEL / ENCODE_H264).
+_CONTENT_TYPES = {"webm": "video/webm", "wav": "audio/wav", "mp4": "video/mp4"}
 
 
 def _content_type(media_format: str) -> str:
@@ -119,6 +124,7 @@ async def upload_chunk(
         )
     return {
         "recording_id": recording_id,
+        "meeting_id": meeting_id,
         "media_file_id": media_file.get("id"),
         "storage_path": key,
         "status": rec_payload["status"],
@@ -137,6 +143,10 @@ async def finalize_master(
     """Build + upload the master for a recording media-file and stamp the JSONB. Returns the master
     storage key, or ``None`` when there is nothing to finalize.
 
+    ``media_type="combined"`` is the muxed audio+video master — delegated to
+    ``finalize_combined_master`` (it has no chunks of its own; it is derived from the audio + video
+    masters via ffmpeg).
+
     RE-ASSEMBLABLE, not write-once (#768). Existence is the WRONG freshness signal: a read while the
     meeting is still recording must not permanently freeze the master. The master is (re)built when
     it is absent OR when the number of chunk objects under the recording's prefix differs from the
@@ -145,6 +155,10 @@ async def finalize_master(
     master frozen by a pre-fix stack on its next read. The freeze is impossible to reintroduce
     silently: the assembled-chunk-count is recorded and compared, and a rebuild-on-growth is logged.
     """
+    if media_type == "combined":
+        return await finalize_combined_master(
+            repo, storage, meeting_id=meeting_id, recording_id=recording_id
+        )
     recordings = await repo.get_recordings(meeting_id)
     rec = next((r for r in recordings if r.get("id") == recording_id), None)
     if rec is None:
@@ -192,6 +206,12 @@ async def finalize_master(
             )
         chunks = [await storage.get(k) for k in keys]
         master_bytes = build_recording_master(chunks, media_format)
+        if media_format == "webm":
+            # Byte-concatenated WebM has no duration → browsers can't seek/show length. Remux to inject
+            # it (best-effort; on ffmpeg failure the raw concat is still served, just not seekable).
+            fixed = await asyncio.to_thread(_ffmpeg_fix_webm_duration, master_bytes)
+            if fixed:
+                master_bytes = fixed
         await storage.upload(master_key, master_bytes, content_type=_content_type(media_format))
 
     # G3 — stamp the media-file finalized ATOMICALLY (read→modify→write under one row lock), so a late
@@ -209,15 +229,170 @@ async def finalize_master(
         m["assembled_chunk_count"] = listed_count
         m["finalized_at"] = _now_iso()
         m["finalized_by"] = "recording_finalizer.master"
-        existing_pb = r.get("playback_url") or {}
-        r["playback_url"] = {
-            "audio": existing_pb.get("audio")
-            or (f"/recordings/{recording_id}/master?type=audio" if media_type == "audio" else None),
-            "video": existing_pb.get("video")
-            or (f"/recordings/{recording_id}/master?type=video" if media_type == "video" else None),
-        }
+        # Merge (don't replace) so a prior ``combined`` URL survives an audio/video re-finalize.
+        pb = dict(r.get("playback_url") or {})
+        pb["audio"] = pb.get("audio") or (
+            f"/recordings/{recording_id}/master?type=audio" if media_type == "audio" else None
+        )
+        pb["video"] = pb.get("video") or (
+            f"/recordings/{recording_id}/master?type=video" if media_type == "video" else None
+        )
+        r["playback_url"] = pb
         others = [x for x in recs if x.get("id") != recording_id]
         return others + [r], master_key
+
+    return await repo.mutate_recordings(meeting_id, _stamp)
+
+
+def _combined_storage_key(video_master_key: str, out_format: str) -> str:
+    """Key for the muxed audio+video master, in the recording's SESSION folder next to the per-type
+    masters. ``video_master_key`` is ``recordings/{u}/{rec}/{sid}/video/master.<fmt>`` → the combined
+    lands at ``recordings/{u}/{rec}/{sid}/combined/master.<out>`` (co-located with audio/ + video/)."""
+    session_prefix = video_master_key.rsplit("/", 1)[0].rsplit("/", 1)[0]  # strip "/master.x" then "/video"
+    return f"{session_prefix}/combined/master.{out_format}"
+
+
+def _ffmpeg_fix_webm_duration(webm_bytes: bytes) -> Optional[bytes]:
+    """Remux a concatenated WebM so its container carries a real top-level Duration.
+
+    MediaRecorder chunks are written live with an UNKNOWN duration, and ``build_recording_master``
+    only byte-concats them — so the master has no duration. Browsers then report ``duration = Infinity``
+    and seeking is broken (the scrub bar grows as you click near the end). ``ffmpeg -c copy`` to a FILE
+    re-writes the header/Cues with the duration computed from the full input — no re-encode. Blocking —
+    call via ``asyncio.to_thread``. Returns None if ffmpeg is missing/fails (caller keeps the raw concat).
+    """
+    with tempfile.TemporaryDirectory() as d:
+        ipath = os.path.join(d, "in.webm")
+        opath = os.path.join(d, "out.webm")
+        with open(ipath, "wb") as f:
+            f.write(webm_bytes)
+        cmd = ["ffmpeg", "-y", "-i", ipath, "-c", "copy", opath]
+        try:
+            proc = subprocess.run(cmd, capture_output=True)
+        except FileNotFoundError:
+            log_event("recording_webm_ffmpeg_missing", audience="system", level="error", span="recordings.finalize")
+            return None
+        if proc.returncode != 0 or not os.path.exists(opath):
+            log_event(
+                "recording_webm_duration_fix_failed", audience="system", level="warning", span="recordings.finalize",
+                fields={"stderr": (proc.stderr or b"").decode("utf-8", "replace")[-500:]},
+            )
+            return None
+        with open(opath, "rb") as f:
+            return f.read()
+
+
+def _ffmpeg_mux_av(
+    video_bytes: bytes, video_format: str, audio_bytes: bytes, audio_format: str, out_format: str
+) -> Optional[bytes]:
+    """Mux a video-only master + an audio master into one self-contained file via ffmpeg (copy the
+    video stream, encode audio to the container's native codec). Blocking — call via ``asyncio.to_thread``.
+    Returns the muxed bytes, or ``None`` if ffmpeg is missing/fails (caller then leaves the per-type
+    masters as the only playback source). Both masters start at recording t=0, so no offset is applied.
+    """
+    acodec = "libopus" if out_format == "webm" else "aac"
+    with tempfile.TemporaryDirectory() as d:
+        vpath = os.path.join(d, f"video.{video_format}")
+        apath = os.path.join(d, f"audio.{audio_format}")
+        opath = os.path.join(d, f"combined.{out_format}")
+        with open(vpath, "wb") as f:
+            f.write(video_bytes)
+        with open(apath, "wb") as f:
+            f.write(audio_bytes)
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", vpath,
+            "-i", apath,
+            "-c:v", "copy",
+            "-c:a", acodec,
+            "-shortest",
+            opath,
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True)
+        except FileNotFoundError:
+            log_event("recording_combined_ffmpeg_missing", audience="system", level="error", span="recordings.combined")
+            return None
+        if proc.returncode != 0 or not os.path.exists(opath):
+            log_event(
+                "recording_combined_mux_failed", audience="system", level="error", span="recordings.combined",
+                fields={"stderr": (proc.stderr or b"").decode("utf-8", "replace")[-500:]},
+            )
+            return None
+        with open(opath, "rb") as f:
+            return f.read()
+
+
+async def finalize_combined_master(
+    repo: RecordingRepo,
+    storage: Storage,
+    *,
+    meeting_id: int,
+    recording_id: int,
+    muxer: Callable[..., Optional[bytes]] = _ffmpeg_mux_av,
+) -> Optional[str]:
+    """Build the muxed audio+video ("combined") master for a recording and stamp
+    ``playback_url.combined`` + a synthetic ``combined`` media-file (so the existing /master + /raw
+    routes serve it by type). Idempotent + cached: reuses the combined object if present. Returns the
+    combined master key, or ``None`` when the recording lacks BOTH an audio and a video master (so it
+    no-ops safely when only one media type exists, or when called before both have finalized).
+
+    ``muxer`` is injectable so tests can exercise the JSONB/storage orchestration without ffmpeg.
+    """
+    # Both per-type masters must exist first (finalize is idempotent).
+    video_key = await finalize_master(repo, storage, meeting_id=meeting_id, recording_id=recording_id, media_type="video")
+    if video_key is None:
+        return None
+    audio_key = await finalize_master(repo, storage, meeting_id=meeting_id, recording_id=recording_id, media_type="audio")
+    if audio_key is None:
+        return None
+
+    recordings = await repo.get_recordings(meeting_id)
+    rec = next((r for r in recordings if r.get("id") == recording_id), None)
+    if rec is None:
+        return None
+    vmf = next((m for m in rec.get("media_files", []) if m.get("type") == "video"), None)
+    amf = next((m for m in rec.get("media_files", []) if m.get("type") == "audio"), None)
+    if vmf is None or amf is None:
+        return None
+
+    video_format = vmf.get("format", "webm")
+    audio_format = amf.get("format", "wav")
+    # VP9/webm video → webm (opus audio); h264/mp4 video → mp4 (aac audio).
+    out_format = "webm" if video_format == "webm" else "mp4"
+    combined_key = _combined_storage_key(video_key, out_format)
+
+    if not await storage.exists(combined_key):
+        video_bytes = await storage.get(video_key)
+        audio_bytes = await storage.get(audio_key)
+        combined_bytes = await asyncio.to_thread(
+            muxer, video_bytes, video_format, audio_bytes, audio_format, out_format
+        )
+        if not combined_bytes:
+            return None  # ffmpeg missing/failed — leave the per-type masters as the playback source
+        await storage.upload(combined_key, combined_bytes, content_type=_content_type(out_format))
+
+    def _stamp(recs):
+        r = next((x for x in recs if x.get("id") == recording_id), None)
+        if r is None:
+            return recs, None
+        mfs = r.setdefault("media_files", [])
+        cmf = next((m for m in mfs if m.get("type") == "combined"), None)
+        if cmf is None:
+            cmf = {"id": new_recording_numeric_id(), "type": "combined"}
+            mfs.append(cmf)
+        cmf.update({
+            "format": out_format,
+            "storage_path": combined_key,
+            "is_final": True,
+            "finalized_at": _now_iso(),
+            "finalized_by": "recording_finalizer.combined",
+        })
+        pb = dict(r.get("playback_url") or {})
+        pb["combined"] = f"/recordings/{recording_id}/master?type=combined"
+        r["playback_url"] = pb
+        others = [x for x in recs if x.get("id") != recording_id]
+        return others + [r], combined_key
 
     return await repo.mutate_recordings(meeting_id, _stamp)
 
