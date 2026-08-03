@@ -1,6 +1,7 @@
 import { Page } from "playwright";
 import { log, logJSON, callLeaveCallback, stopZoomRecording } from "../_host";
 import { BotConfig } from "../_host";
+import { triggerEscalation, autoConsentEnabled } from "../shared/escalation";
 import { zoomLeaveConfirmSelector } from "./selectors";
 
 /**
@@ -32,6 +33,38 @@ export async function dismissZoomPopups(page: Page): Promise<void> {
       }
     } catch { /* not present or already gone */ }
   }
+}
+
+/**
+ * Active-meeting popup handling, polled during the call. NON-consent overlays (AI Companion, feature
+ * tips, guest-chat, mic-muted) are auto-dismissed via dismissZoomPopups. The "This meeting is being
+ * recorded" CONSENT modal follows the SAME policy as Google Meet (Vexa-ai/vexa#429): consent is the
+ * user's choice, so the bot ESCALATES to a human rather than clicking it — UNLESS the deployment opts
+ * into auto-consent via BOT_AUTO_CONSENT=1, in which case it accepts (Continue / Got It / Agree).
+ *
+ * The recording modal is handled FIRST and short-circuits the broad dismisser: dismissZoomPopups has
+ * generic `.zm-modal … OK/Got it` targets that could otherwise click the consent modal and consent
+ * silently. Selectors are best-effort against Zoom web (`.zm-modal` / `.ReactModal__Content`) — verify
+ * live and tune the button text if Zoom's wording differs.
+ */
+export async function handleZoomConsentAndPopups(page: Page, botConfig?: unknown): Promise<void> {
+  const recordingModal = page.locator(
+    '.zm-modal:has-text("being recorded"), .zm-modal:has-text("is recording"), .ReactModal__Content:has-text("being recorded")',
+  ).first();
+  if (await recordingModal.isVisible({ timeout: 0 }).catch(() => false)) {
+    if (autoConsentEnabled()) {
+      const accept = recordingModal.locator(
+        'button:has-text("Continue"), button:has-text("Got It"), button:has-text("Got it"), button:has-text("Agree"), button:has-text("OK")',
+      ).first();
+      await accept.click({ timeout: 0 }).catch(() => {});
+      log('[Zoom Web] BOT_AUTO_CONSENT=1 — auto-accepted the "this meeting is being recorded" consent modal');
+    } else {
+      log('[Zoom Web] "This meeting is being recorded" consent modal — escalating to a human (consent is the user\'s choice; set BOT_AUTO_CONSENT=1 to auto-accept)');
+      await triggerEscalation(botConfig ?? {}, 'consent_required').catch(() => {});
+    }
+    return; // don't run the broad dismisser while the consent modal is up — it could clobber it
+  }
+  await dismissZoomPopups(page).catch(() => {});
 }
 
 export async function leaveZoomMeeting(

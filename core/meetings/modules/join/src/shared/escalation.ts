@@ -5,6 +5,17 @@ import { log, callNeedsHumanHelpCallback } from '../_host';
 let escalationTriggered = false;
 let vncStarted = false;
 
+/**
+ * Deployment knob: auto-ACCEPT consent gates (the "this meeting is being recorded" notice, Google's
+ * "take notes" consent) instead of escalating to a human. Default OFF — consent is the user's choice
+ * (Vexa-ai/vexa#429), so the bot summons a human rather than consenting on their behalf. A self-host
+ * that records its OWN meetings can set BOT_AUTO_CONSENT=1 to click through automatically.
+ */
+export function autoConsentEnabled(): boolean {
+  const v = (process.env.BOT_AUTO_CONSENT || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
 export interface EscalationResult {
   reason: string;
   urgency: 'high' | 'critical';

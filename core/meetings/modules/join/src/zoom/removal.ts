@@ -1,5 +1,6 @@
 import { Page } from "playwright";
 import { log } from "../_host";
+import { handleZoomConsentAndPopups } from "./leave";
 import { zoomLeaveButtonSelector, zoomMeetingEndedModalSelector, zoomRemovalTexts } from "./selectors";
 
 /**
@@ -24,7 +25,8 @@ function isZoomAudioInitUrl(url: string): boolean {
 
 export function startZoomRemovalMonitor(
   page: Page | null,
-  onRemoval?: () => void | Promise<void>
+  onRemoval?: () => void | Promise<void>,
+  botConfig?: unknown
 ): () => void {
   if (!page) return () => {};
 
@@ -86,6 +88,9 @@ export function startZoomRemovalMonitor(
     if (stopped || !page || page.isClosed()) return;
 
     try {
+      // Clear post-join overlays each cycle (AI Companion etc.); the "being recorded" consent modal
+      // escalates to a human unless BOT_AUTO_CONSENT=1. Best-effort — never blocks removal detection.
+      await handleZoomConsentAndPopups(page, botConfig).catch(() => {});
       // Check for end-of-meeting modal (zm-modal-body-title)
       const modalEl = page.locator(zoomMeetingEndedModalSelector).first();
       const modalVisible = await modalEl.isVisible({ timeout: 300 }).catch(() => false);
