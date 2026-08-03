@@ -45,6 +45,9 @@ export function getLocaleBrowserArgs(): string[] {
 }
 
 export const JOIN_BROWSER_ARGS: readonly string[] = [
+  "--window-position=0,0",
+  "--window-size=1920,1080",
+  "--start-fullscreen",
   "--incognito",
   "--no-sandbox",
   "--disable-setuid-sandbox",
