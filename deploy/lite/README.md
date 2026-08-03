@@ -68,8 +68,8 @@ Supervised by `supervisord`:
 | agent-api | **8100** | the agent control plane — dispatch, chat (SSE), routines |
 | terminal | **3001** | agent-domain browser-CLI workbench (Next.js + custom `server.mjs` SSE/`/ws` relay) |
 | redis | 6379 | bus + scheduler + per-dispatch streams (internal) |
-| Xvfb · fluxbox · PulseAudio | :99 | display + audio for the headful bot browser |
-| x11vnc · noVNC | 5900 / 6080 | browser view (debugging) |
+| Xvfb · fluxbox · PulseAudio | :99 | shared audio + fallback display; each bot also gets its OWN private Xvfb |
+| x11vnc · noVNC | 5900 / 6080 | browser view of `:99` (debugging; bots now render on private displays) |
 
 External (the `make lite` sidecars): **PostgreSQL** (metadata) and **MinIO** (recordings +
 agent workspaces).
@@ -140,7 +140,7 @@ Outgrow lite? Switch to [compose](../compose/README.md) — same images, same co
 
 | Issue | Note |
 |---|---|
-| Shared X11 display | bots share one Xvfb (`:99`) — best for one browser session at a time |
+| Per-bot X11 display | each bot gets its own auto-allocated Xvfb (falls back to shared `:99`), so concurrent meetings record their OWN video — but the noVNC view only shows `:99`, not the private bot displays |
 | Ephemeral redis | internal redis is in-container; mount `/var/lib/redis` for persistence |
 | Agent ↔ gateway | the agent control plane is reached directly on `:8100` (gateway-fronting is roadmap) |
 

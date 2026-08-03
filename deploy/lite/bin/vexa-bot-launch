@@ -3,16 +3,93 @@
 # Vexa Lite — meeting-bot launcher (process backend)
 # =============================================================================
 # The runtime kernel (RUNTIME_BACKEND=process) execs this once per meeting via the
-# meeting-bot profile (BOT_COMMAND). Unlike the bot's own container entrypoint, it does
-# NOT bring up Xvfb / PulseAudio — supervisord already owns those for the whole container
-# (one shared display, like 0.10.6 lite). The bot's full constructor arrives in the
-# inherited env as VEXA_BOT_CONFIG (invocation.v1); we just run the worker.
+# meeting-bot profile (BOT_COMMAND). The bot's full constructor arrives in the inherited
+# env as VEXA_BOT_CONFIG (invocation.v1); we set up its display and run the worker.
+#
+# PER-BOT DISPLAY ISOLATION (concurrency fix)
+# -------------------------------------------
+# supervisord owns a shared Xvfb :99, but server-side video recording grabs the WHOLE
+# display via `ffmpeg -f x11grab` (@vexa/recording VideoRecordingService). If concurrent
+# bots shared :99, every bot's ffmpeg would capture whichever browser last owned that
+# screen — so two simultaneous meetings both recorded the SAME (2nd) video. Audio is
+# already isolated (each bot captures via an in-browser MediaRecorder tap on its OWN
+# browser context, not a display grab), which is why audio was correct but video wasn't.
+#
+# So each bot gets its OWN private Xvfb (an auto-allocated free display) + a fluxbox WM;
+# its Chromium renders there and its ffmpeg grabs ONLY that display. We tear the private
+# display down when the worker exits. If private allocation fails (e.g. an Xvfb without
+# -displayfd), we fall back to the shared display so single-session lite still works.
+#
+# NOTE: with private displays the shared x11vnc/noVNC view (:99) no longer shows the bot
+# browsers — each meeting is on its own display. That's an intentional trade for correct
+# concurrent recording on the single-host lite deployment.
 set -u
 
-export DISPLAY="${DISPLAY:-:99}"
+# MUST stay 1920x1080 — VideoRecordingService's x11grab uses `-video_size 1920x1080`; a
+# mismatched Xvfb geometry makes ffmpeg grab the wrong region (or error).
+SCREEN_GEOM="1920x1080x24"
 
+XVFB_PID=""
+FLUXBOX_PID=""
+DISPNUM_FILE=""
+
+cleanup() {
+  [ -n "${FLUXBOX_PID}" ] && kill "${FLUXBOX_PID}" 2>/dev/null
+  [ -n "${XVFB_PID}" ] && kill "${XVFB_PID}" 2>/dev/null
+  [ -n "${DISPNUM_FILE}" ] && rm -f "${DISPNUM_FILE}" 2>/dev/null
+  return 0
+}
+trap cleanup EXIT
+
+# ── Allocate a private display for THIS bot ──────────────────────────────────────────
+DISPNUM_FILE="$(mktemp 2>/dev/null || echo "/tmp/vexa-dispnum-$$")"
+# `Xvfb -displayfd 1` picks a FREE display number and writes it to fd 1 (→ the file).
+Xvfb -displayfd 1 -screen 0 "${SCREEN_GEOM}" -ac +extension GLX +render -noreset \
+  >"${DISPNUM_FILE}" 2>"/tmp/xvfb-bot-$$.log" &
+XVFB_PID=$!
+
+DNUM=""
+for _ in $(seq 1 100); do
+  DNUM="$(tr -d '[:space:]' < "${DISPNUM_FILE}" 2>/dev/null)"
+  [ -n "${DNUM}" ] && break
+  kill -0 "${XVFB_PID}" 2>/dev/null || break   # Xvfb died → stop waiting, fall back
+  sleep 0.1
+done
+
+if [ -n "${DNUM}" ]; then
+  export DISPLAY=":${DNUM}"
+  echo "[bot-launch] private display ${DISPLAY} (Xvfb pid ${XVFB_PID})"
+  fluxbox >"/tmp/fluxbox-${DNUM}.log" 2>&1 &
+  FLUXBOX_PID=$!
+else
+  # Allocation failed — DON'T kill the shared supervisord Xvfb; just reuse it.
+  [ -n "${XVFB_PID}" ] && kill "${XVFB_PID}" 2>/dev/null
+  XVFB_PID=""
+  export DISPLAY="${DISPLAY:-:99}"
+  echo "[bot-launch] private display alloc failed — using shared ${DISPLAY} (concurrent video may cross-capture)"
+fi
+
+# ── Run the worker ───────────────────────────────────────────────────────────────────
 # Run from the bot package dir so its relative schema path (src→../../../contracts) and the
-# pnpm-linked workspace deps resolve, exactly like the bot's container entrypoint does. The
-# page-side capture bundle is at /app/browser-utils.global.js (capture-bridge injects that path).
-cd /app/core/meetings/services/bot
-exec node dist/index.js
+# pnpm-linked workspace deps resolve, exactly like the bot's container entrypoint. The
+# page-side capture bundle is at /app/browser-utils.global.js (capture-bridge injects it).
+cd /app/core/meetings/services/bot || exit 1
+echo "[bot-launch] starting @vexa/bot worker (node dist/index.js, DISPLAY=${DISPLAY})..."
+
+# Signal forwarding: this script no longer `exec`s node (it owns a private Xvfb to clean
+# up afterward), so a bare bash would neither pass SIGTERM to the worker nor let the
+# graceful leave run. Run the worker in the background and FORWARD TERM/INT so it can leave
+# the meeting → flush recording → emit the terminal callback → exit 0 (bounded <25s by the
+# worker's own watchdog); the EXIT trap then tears down the private display.
+node dist/index.js &
+WORKER_PID=$!
+trap 'kill -TERM "${WORKER_PID}" 2>/dev/null' TERM
+trap 'kill -INT "${WORKER_PID}" 2>/dev/null' INT
+wait "${WORKER_PID}"
+EXIT_CODE=$?
+while kill -0 "${WORKER_PID}" 2>/dev/null; do
+  wait "${WORKER_PID}"
+  EXIT_CODE=$?
+done
+echo "[bot-launch] @vexa/bot worker exited with code ${EXIT_CODE}"
+exit ${EXIT_CODE}
