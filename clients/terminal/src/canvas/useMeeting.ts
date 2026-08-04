@@ -371,7 +371,26 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     // to the first line here was slightly early (the recording starts a beat after the first spoken word).
     const recordedSegments = durableLines.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.startSec }));
     const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.startSec }));
-    const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
+    // LIVE meeting: the SSE store only carries the seed's bounded tail (the agent replays the last N stream
+    // entries) plus new deltas, so opening mid-meeting would otherwise show only the last few lines. Merge the
+    // durable FULL history UNDER the live edge — same segment_id ⇒ the live version wins; everything the live
+    // edge doesn't cover comes from the DB. That durable remainder is strictly older than the live edge, so we
+    // prepend it (sorted among itself) and leave the live edge in its SSE arrival order untouched.
+    const liveById = new Map(liveSegments.map((s) => [s.id, s]));
+    const durableUnderLive = durableLines
+      .filter((s) => s.segment_id && !liveById.has(s.segment_id))
+      .map((s) => ({
+        id: s.segment_id,
+        speaker: s.speaker,
+        text: cleanTranscriptText(s.text),
+        // Absolute wall-clock (epoch ms) — the same clock the SSE lines render/sort in. Durable startSec is
+        // an absolute epoch in SECONDS.
+        tsMs: typeof s.startSec === "number" && Number.isFinite(s.startSec) ? s.startSec * 1000 : undefined,
+        completed: true,
+      }))
+      .sort((a, b) => (a.tsMs ?? 0) - (b.tsMs ?? 0));
+    const liveMerged = durableUnderLive.length ? [...durableUnderLive, ...liveSegments] : liveSegments;
+    const segments = selected.session_uid ? liveMerged : (recordedSegments.length ? recordedSegments : fallbackSegments);
     const copilotCards = safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: cleanTranscriptText(c.title), body: c.body ? cleanTranscriptText(c.body) : c.body }));
     const diagnostics = {
       liveConnected: live.connected,
