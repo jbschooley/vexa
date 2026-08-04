@@ -16,6 +16,12 @@ export interface PlaybackSync {
   scrollerRef: RefObject<HTMLElement | null>;
   /** True once a player has registered a seek handler (a recording is loaded and playable). */
   hasPlayer: boolean;
+  /** Wall-clock epoch (ms) the recording's currentTime=0 maps to — the player computes it once media
+   *  metadata loads (end_time − played-file duration) so the transcript anchors to the RECORDING's true
+   *  start, not the first spoken line. Null until known (falls back to the earliest line). */
+  recStartMs: number | null;
+  /** The player publishes its anchor here (re-computed on an audio/video toggle — durations differ). */
+  setRecStartMs(ms: number | null): void;
   /** The player registers HOW to seek (relative seconds); pass null on unmount. */
   registerSeek(fn: ((sec: number) => void) | null): void;
   /** Transcript → player: seek to a relative-second offset (and play). */
@@ -44,15 +50,20 @@ export function PlaybackSyncProvider({
   // A boolean (not a ref) so the transcript re-renders ONCE when a player appears/disappears and can
   // flip its lines between plain and clickable. Flips at most a couple of times per meeting.
   const [hasPlayer, setHasPlayer] = useState(false);
+  // The recording anchor re-renders the transcript when it resolves/changes (media load, toggle) so the
+  // active-line + click math re-derives against the correct start. Rare.
+  const [recStartMs, setRecStartMs] = useState<number | null>(null);
 
   const value = useMemo<PlaybackSync>(() => ({
     scrollerRef,
     hasPlayer,
+    recStartMs,
+    setRecStartMs,
     registerSeek: (fn) => { seekRef.current = fn; setHasPlayer(fn != null); },
     seekTo: (sec) => seekRef.current?.(sec),
     emitTime: (sec, playing) => { for (const l of listeners.current) l(sec, playing); },
     subscribeTime: (cb) => { listeners.current.add(cb); return () => { listeners.current.delete(cb); }; },
-  }), [scrollerRef, hasPlayer]);
+  }), [scrollerRef, hasPlayer, recStartMs]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

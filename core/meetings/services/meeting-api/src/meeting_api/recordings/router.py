@@ -151,6 +151,10 @@ def build_router(
         is_final = is_final if is_final is not None else bool(meta.get("is_final", True))
         duration_seconds = duration_seconds if duration_seconds is not None else meta.get("duration_seconds")
         sample_rate = sample_rate if sample_rate is not None else meta.get("sample_rate")
+        # The bot's TRUE recorder start (ffmpeg/first-frame wall clock) — the recording's t=0, on the SAME
+        # clock the transcript is stamped with. Carry it so first_chunk_at reflects it, not our receive-now
+        # (which lags by the chunk interval + upload) — that lag is exactly the transcript↔recording drift.
+        started_at_utc = meta.get("start_time_utc")
 
         # Auth: accept either the INTERNAL_API_SECRET (the bot's internal upload uses it, like the
         # lifecycle callback; meeting is scoped by session_uid) OR a MeetingToken (carries its meeting_id).
@@ -175,6 +179,7 @@ def build_router(
                 media_type=media_type, media_format=media_format,
                 chunk_seq=chunk_seq, is_final=is_final,
                 duration_seconds=duration_seconds, sample_rate=sample_rate,
+                started_at_utc=started_at_utc,
             )
         except SessionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e))
