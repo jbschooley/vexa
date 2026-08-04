@@ -16,10 +16,14 @@
 import { useEffect, useRef, useState } from "react";
 import { usePlaybackSync } from "./playbackSync";
 
-type MediaFile = { id?: number; type?: string };
+type MediaFile = { id?: number; type?: string; first_chunk_at?: string };
 type Recording = { id?: number; meeting_id?: number | string; media_files?: MediaFile[] };
 type MasterResponse = { media_file_id?: number | null };
-type Resolved = { videoSrc: string | null; audioSrc: string | null };
+// Per-track recording start (epoch ms) = the media file's `first_chunk_at` (the bot's true recorder t=0,
+// same clock as the transcript). Video and audio start at different moments, so we anchor per active track.
+type Resolved = { videoSrc: string | null; audioSrc: string | null; videoStartMs: number | null; audioStartMs: number | null };
+
+const parseMs = (s?: string): number | null => { if (!s) return null; const t = Date.parse(s); return Number.isFinite(t) ? t : null; };
 
 /** Resolve a recording's master of `type` to the streaming byte URL, or null if there's none. */
 async function masterUrl(recId: number, type: string, signal: AbortSignal): Promise<string | null> {
@@ -32,25 +36,31 @@ async function masterUrl(recId: number, type: string, signal: AbortSignal): Prom
 async function resolveMedia(meetingId: string, signal: AbortSignal): Promise<Resolved> {
   // The recordings list is the authoritative source; GET /recordings returns { recordings: [...] }.
   const listRes = await fetch("/api/recordings", { signal, cache: "no-store" });
-  if (!listRes.ok) return { videoSrc: null, audioSrc: null };
+  if (!listRes.ok) return { videoSrc: null, audioSrc: null, videoStartMs: null, audioStartMs: null };
   const body = (await listRes.json()) as { recordings?: Recording[] };
   const mine = (body?.recordings ?? []).filter(
     (r) => String(r.meeting_id) === String(meetingId) && r.id != null,
   );
   let videoSrc: string | null = null;
   let audioSrc: string | null = null;
+  let videoStartMs: number | null = null;
+  let audioStartMs: number | null = null;
   for (const rec of mine) {
-    const types = new Set((rec.media_files ?? []).map((m) => m.type));
+    const files = rec.media_files ?? [];
+    const types = new Set(files.map((m) => m.type));
     if (!videoSrc && types.has("video")) {
-      // Prefer the muxed master (has sound); fall back to the silent video-only master.
+      // Prefer the muxed master (has sound); fall back to the silent video-only master. The combined
+      // master shares the video timeline, so anchor both to the raw VIDEO file's start.
       videoSrc = (await masterUrl(rec.id!, "combined", signal)) || (await masterUrl(rec.id!, "video", signal));
+      videoStartMs = parseMs(files.find((m) => m.type === "video")?.first_chunk_at);
     }
     if (!audioSrc && types.has("audio")) {
       audioSrc = await masterUrl(rec.id!, "audio", signal);
+      audioStartMs = parseMs(files.find((m) => m.type === "audio")?.first_chunk_at);
     }
     if (videoSrc && audioSrc) break;
   }
-  return { videoSrc, audioSrc };
+  return { videoSrc, audioSrc, videoStartMs, audioStartMs };
 }
 
 export function RecordingPlayer({
@@ -65,7 +75,7 @@ export function RecordingPlayer({
   /** Report resolved tracks up so the header knows whether to show the audio/video toggle. */
   onTracks?: (t: { hasVideo: boolean; hasAudio: boolean }) => void;
 }) {
-  const [media, setMedia] = useState<Resolved>({ videoSrc: null, audioSrc: null });
+  const [media, setMedia] = useState<Resolved>({ videoSrc: null, audioSrc: null, videoStartMs: null, audioStartMs: null });
   const [state, setState] = useState<"idle" | "loading" | "ready" | "none" | "error">("idle");
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -135,6 +145,14 @@ export function RecordingPlayer({
       el.removeEventListener("pause", onTime);
     };
   }, [showAudio, media.videoSrc, media.audioSrc, state, sync]);
+
+  // Publish the recording's start (created_at) as the transcript's anchor. Same for both tracks (one
+  // recording), so a toggle doesn't disturb it.
+  // Anchor the transcript to the ACTIVE track's recording start (video and audio differ). Recomputes on
+  // toggle so the sync follows whichever file is playing.
+  useEffect(() => {
+    sync?.setRecStartMs(showAudio ? media.audioStartMs : media.videoStartMs);
+  }, [showAudio, media.audioStartMs, media.videoStartMs, sync]);
 
   if (state === "none" || state === "idle") return null; // no recording → render nothing
 

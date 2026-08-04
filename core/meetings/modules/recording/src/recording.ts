@@ -141,6 +141,9 @@ export class RecordingService {
       channels: this.channels,
       duration_seconds: durationSeconds,
       file_size_bytes: fileStats.size,
+      // The recorder's true start (wall clock) — the server uses it as first_chunk_at so the transcript
+      // anchors to the recording's real t=0 (same clock the transcript is stamped with).
+      start_time_utc: this.startTime > 0 ? new Date(this.startTime).toISOString() : undefined,
     });
 
     // Build multipart body
@@ -241,6 +244,7 @@ export class RecordingService {
       file_size_bytes: chunkData.length,
       chunk_seq: chunkSeq,
       is_final: isFinal,
+      start_time_utc: this.startTime > 0 ? new Date(this.startTime).toISOString() : undefined,
     });
 
     const parts: Buffer[] = [];

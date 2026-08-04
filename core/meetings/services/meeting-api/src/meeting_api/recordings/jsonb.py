@@ -42,6 +42,7 @@ def apply_chunk_to_recording(
     is_final: bool,
     duration_seconds: Optional[float],
     sample_rate: Optional[int],
+    started_at_utc: Optional[str] = None,
 ) -> tuple[dict, bool]:
     """Fold one uploaded chunk into the recording payload.
 
@@ -74,7 +75,10 @@ def apply_chunk_to_recording(
     prior_first_chunk_at = (prior_same_type or {}).get("first_chunk_at") if prior_same_type else None
     cumulative_bytes = (prior_bytes + file_size) if prior_same_type else file_size
     cumulative_chunk_count = (prior_chunk_count + 1) if prior_same_type else 1
-    first_chunk_at = prior_first_chunk_at or _now_iso()
+    # The bot's true recorder start (start_time_utc) is the file's t=0 — use it over our receive-now so a
+    # single-shot upload (video, sent once at the END) doesn't stamp the end time, and a chunked upload
+    # (audio) sheds the first-chunk upload lag. Prior value wins (set on chunk 0, preserved after).
+    first_chunk_at = prior_first_chunk_at or started_at_utc or _now_iso()
     media_files = [mf for mf in prior_media_files if mf.get("type") != media_type]
 
     # Pack U.7 — preserve a finalized master path against a late-chunk overwrite.

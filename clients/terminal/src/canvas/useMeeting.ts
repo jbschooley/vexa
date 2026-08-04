@@ -366,15 +366,11 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     // EARLIEST one, mapping the transcript onto the recording's 0..duration timeline. (Using the display
     // string, or the raw epoch, made every line resolve to one huge/constant time.)
     const durableLines = safeArray(durable.lines);
-    // Anchor to the EARLIEST line: the video master's recording starts at ~the first transcript segment
-    // (verified: end_time − duration ≈ first-segment epoch), NOT at meeting.start_time (which is a couple
-    // seconds earlier and made the recording read ahead of the transcript). Segment `startSec` is an
-    // absolute epoch, so subtracting the earliest maps the transcript onto the recording's 0..duration.
-    const recAnchorSec = durableLines.reduce<number>((m, l) => (typeof l.startSec === "number" ? Math.min(m, l.startSec) : m), Infinity);
-    const relSec = (startSec?: number): number | undefined =>
-      Number.isFinite(recAnchorSec) && typeof startSec === "number" ? Math.max(0, startSec - recAnchorSec) : undefined;
-    const recordedSegments = durableLines.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: relSec(s.startSec) }));
-    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: relSec(s.startSec) }));
+    // Pass the ABSOLUTE epoch (seconds) — the transcript engine anchors it to the recording's true start
+    // (end_time − played-file duration), which only the player knows and which differs per track. Anchoring
+    // to the first line here was slightly early (the recording starts a beat after the first spoken word).
+    const recordedSegments = durableLines.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.startSec }));
+    const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: cleanTranscriptText(s.text), ts: s.startSec }));
     const segments = selected.session_uid ? liveSegments : (recordedSegments.length ? recordedSegments : fallbackSegments);
     const copilotCards = safeArray(live.cards).map((c, i) => ({ id: `live-${i}-${c.kind}-${c.title}`, kind: c.kind, title: cleanTranscriptText(c.title), body: c.body ? cleanTranscriptText(c.body) : c.body }));
     const diagnostics = {

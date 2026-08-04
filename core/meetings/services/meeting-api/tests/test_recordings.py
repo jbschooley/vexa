@@ -394,6 +394,29 @@ def test_empty_final_fold_never_points_storage_at_signal_chunk():
     assert transitioned is True
 
 
+async def test_started_at_utc_becomes_first_chunk_at():
+    """The bot's true recorder start (start_time_utc) is the recording's t=0 — the server stamps it as
+    first_chunk_at, NOT its receive-now, so the transcript can anchor to the recording (both on the bot's
+    clock). Critical for single-shot video (uploaded once at the END) where receive-now = the end time."""
+    started = "2026-08-03T17:02:06.100000Z"
+    key = chunk_storage_key(user_id=USER, recording_id=123, session_uid=SESSION_UID,
+                            media_type="video", media_format="mp4", chunk_seq=0)
+    rec, _ = apply_chunk_to_recording(
+        None, recording_id=123, meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID,
+        media_type="video", media_format="mp4", storage_path=key, file_size=1000,
+        chunk_seq=0, is_final=True, duration_seconds=42.0, sample_rate=None,
+        started_at_utc=started,
+    )
+    assert next(m for m in rec["media_files"] if m["type"] == "video")["first_chunk_at"] == started
+    # Preserved when a later chunk of the same type omits it.
+    rec2, _ = apply_chunk_to_recording(
+        rec, recording_id=123, meeting_id=MEETING_ID, user_id=USER, session_uid=SESSION_UID,
+        media_type="video", media_format="mp4", storage_path=key, file_size=1000,
+        chunk_seq=1, is_final=True, duration_seconds=50.0, sample_rate=None, started_at_utc=None,
+    )
+    assert next(m for m in rec2["media_files"] if m["type"] == "video")["first_chunk_at"] == started
+
+
 async def test_single_final_chunk_downloads_byte_complete():
     """A4 (no-regression): today's single-master-equivalent writer (ONE is_final chunk carrying
     data) still lists, masters, and /raw-downloads byte-complete."""

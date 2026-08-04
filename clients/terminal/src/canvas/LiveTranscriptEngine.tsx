@@ -149,12 +149,25 @@ export function LiveTranscriptEngine({
   const sync = usePlaybackSync();
   const clickable = !!sync?.hasPlayer;   // a recording is loaded → lines seek it on click
 
-  // Each block's start in RELATIVE seconds (the media clock): the line's own `ts`, else derived from its
-  // absolute `tsMs` anchored to the earliest line (≈ recording start). Undefined when neither is known.
+  // Each block's start in RELATIVE seconds (the media clock). A RECORDED line's `ts` is an ABSOLUTE epoch
+  // (seconds); anchor it to the recording's TRUE start when the player knows it (recStartMs = end −
+  // duration), else the earliest line. Live lines carry relative `ts` + absolute `tsMs`; they have no
+  // player, so anchorSec ≈ their own earliest value and startSec is unused (live display uses tsMs).
+  const tsSecOf = (b: { ts?: number | string }): number | undefined => {
+    const t = typeof b.ts === "string" ? parseFloat(b.ts) : b.ts;
+    return typeof t === "number" && Number.isFinite(t) ? t : undefined;
+  };
+  const minTsSec = blocks.reduce<number | null>((m, b) => { const t = tsSecOf(b); return t != null ? (m == null ? t : Math.min(m, t)) : m; }, null);
+  const maxTsSec = blocks.reduce<number | null>((m, b) => { const t = tsSecOf(b); return t != null ? (m == null ? t : Math.max(m, t)) : m; }, null);
+  const recStartSec = (sync?.recStartMs != null && Number.isFinite(sync.recStartMs)) ? sync.recStartMs / 1000 : null;
+  // Trust the player's recording-start anchor only when it's a sane lower bound within the meeting span —
+  // a PRE-FIX recording carries a bogus first_chunk_at (master-assembly time, well after the meeting), and
+  // anchoring to that would collapse every line to 0. Otherwise fall back to the earliest line.
+  const anchorSec = (recStartSec != null && (maxTsSec == null || recStartSec <= maxTsSec + 60)) ? recStartSec : minTsSec;
   const anchorMs = blocks.reduce<number | null>((m, b) => (typeof b.tsMs === "number" ? (m == null ? b.tsMs : Math.min(m, b.tsMs)) : m), null);
   const startSecOf = (b: { ts?: number | string; tsMs?: number }): number | undefined => {
-    const t = typeof b.ts === "string" ? parseFloat(b.ts) : b.ts;
-    if (typeof t === "number" && Number.isFinite(t)) return t;
+    const t = tsSecOf(b);
+    if (t != null && anchorSec != null) return Math.max(0, t - anchorSec);
     return typeof b.tsMs === "number" && anchorMs != null ? (b.tsMs - anchorMs) / 1000 : undefined;
   };
   // Read by the playback subscriber (which is set up once) — always the latest block times.
