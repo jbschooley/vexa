@@ -46,6 +46,7 @@ interface SegmentDTO {
   start?: number | null;
   speaker?: string | null;
   text?: string | null;
+  segment_id?: string | null;
 }
 
 /** A persisted processed note from the durable store (`data.processed.views[].doc.notes[]`,
@@ -297,6 +298,9 @@ export async function fetchDurableTranscript(meetingId: string): Promise<Durable
         // The raw numeric offset (relative seconds from recording start) — the media clock the
         // transcript↔player sync seeks on. `t` above is only the display string; keep the number too.
         startSec: typeof s.start === "number" && Number.isFinite(s.start) ? s.start : undefined,
+        // Stable identity — lets the live view merge the full durable history under the live SSE edge
+        // (same id → the live version wins) so opening mid-meeting shows everything, not just recent lines.
+        segment_id: s.segment_id ?? undefined,
         speaker: s.speaker || "Speaker", text: s.text ?? "",
       }));
     return { lines, notes: processedNotesOf(body) };
