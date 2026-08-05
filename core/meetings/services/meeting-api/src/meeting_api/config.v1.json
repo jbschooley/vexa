@@ -146,6 +146,15 @@
    ]
   },
   {
+   "key": "RECORDING_COMBINED_AUDIO_CODEC",
+   "class": "defaulted",
+   "default": "",
+   "description": "audio codec for the muxed combined (audio+video) recording master. Empty (default) re-encodes to the container's native codec — aac for mp4, opus for webm — which every client can play. Set to 'copy' to stream-copy the source opus straight into mp4 (near-instant, no transcode) WHEN every client can play opus-in-mp4 (Chromium/Firefox can; older Safari/hardware may not). Read by meeting-api at combined-master build time",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
    "key": "BOT_AUTHENTICATED",
    "class": "defaulted",
    "default": "false",

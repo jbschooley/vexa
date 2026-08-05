@@ -292,7 +292,12 @@ def _ffmpeg_mux_av(
     Returns the muxed bytes, or ``None`` if ffmpeg is missing/fails (caller then leaves the per-type
     masters as the only playback source). Both masters start at recording t=0, so no offset is applied.
     """
-    acodec = "libopus" if out_format == "webm" else "aac"
+    # Audio codec for the muxed master. DEFAULT re-encodes to the container's native codec (aac for
+    # mp4, opus for webm) — universally playable. RECORDING_COMBINED_AUDIO_CODEC overrides it: set it
+    # to "copy" to stream-copy the source opus straight into mp4 (near-instant, no transcode) WHEN you
+    # know every client can play opus-in-mp4 (Chromium/Firefox can; older Safari/hardware may not).
+    override = os.getenv("RECORDING_COMBINED_AUDIO_CODEC", "").strip().lower()
+    acodec = override or ("libopus" if out_format == "webm" else "aac")
     with tempfile.TemporaryDirectory() as d:
         vpath = os.path.join(d, f"video.{video_format}")
         apath = os.path.join(d, f"audio.{audio_format}")
@@ -397,6 +402,38 @@ async def finalize_combined_master(
         return others + [r], combined_key
 
     return await repo.mutate_recordings(meeting_id, _stamp)
+
+
+async def combined_master_ready_key(
+    repo: RecordingRepo,
+    storage: Storage,
+    *,
+    meeting_id: int,
+    recording_id: int,
+) -> Optional[str]:
+    """Fast, NO-MUX check: return the combined master key IF it already exists in storage (stamping
+    its synthetic media-file so /raw can serve it), else None. This is the READ path — it never runs
+    the (slow, seconds-to-minutes) ffmpeg mux; that is ``finalize_combined_master``, run in the
+    background. Finalizes the per-type masters first (byte-concat, cheap + cached on repeat) so the
+    combined key can be computed, then probes storage. When the object is present,
+    ``finalize_combined_master`` short-circuits (it checks ``storage.exists``) so calling it only
+    stamps the media-file — no mux."""
+    video_key = await finalize_master(repo, storage, meeting_id=meeting_id, recording_id=recording_id, media_type="video")
+    audio_key = await finalize_master(repo, storage, meeting_id=meeting_id, recording_id=recording_id, media_type="audio")
+    if video_key is None or audio_key is None:
+        return None  # a combined master needs BOTH tracks — not yet (or a single-track recording)
+    recordings = await repo.get_recordings(meeting_id)
+    rec = next((r for r in recordings if r.get("id") == recording_id), None)
+    if rec is None:
+        return None
+    vmf = next((m for m in rec.get("media_files", []) if m.get("type") == "video"), None)
+    if vmf is None:
+        return None
+    out_format = "webm" if vmf.get("format", "webm") == "webm" else "mp4"
+    if not await storage.exists(_combined_storage_key(video_key, out_format)):
+        return None  # not built yet → caller plays the silent video and polls
+    # Object is present → finalize is a cheap stamp (no mux); returns the key + ensures the media-file.
+    return await finalize_combined_master(repo, storage, meeting_id=meeting_id, recording_id=recording_id)
 
 
 def _verify_meeting_token(token: str, *, secret: Optional[str] = None) -> dict[str, Any]:
