@@ -32,13 +32,14 @@ from .jsonb import (
 )
 from .ports import RecordingRepo, Storage
 from .router import build_router
-from .service import SessionNotFound, finalize_combined_master, finalize_master, upload_chunk
+from .service import SessionNotFound, combined_master_ready_key, finalize_combined_master, finalize_master, upload_chunk
 
 __all__ = [
     "build_router",
     "upload_chunk",
     "finalize_master",
     "finalize_combined_master",
+    "combined_master_ready_key",
     "apply_chunk_to_recording",
     "chunk_storage_key",
     "master_storage_key",

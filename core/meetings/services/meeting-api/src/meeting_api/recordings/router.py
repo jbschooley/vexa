@@ -22,10 +22,33 @@ from .ports import RecordingRepo, Storage
 from .service import (
     SessionNotFound,
     _verify_meeting_token,
+    combined_master_ready_key,
     finalize_combined_master,
     finalize_master,
     upload_chunk,
 )
+
+# Recording ids whose combined-master mux is building right now (this process). The read path
+# schedules ONE background build per recording and returns 202 while it runs, so repeated page
+# loads never spawn a second ffmpeg or restart the mux. FastAPI is single-threaded async, so the
+# check-and-add below is atomic (no await between them).
+_combined_building: set[int] = set()
+
+
+def _schedule_combined_build(
+    background_tasks: "BackgroundTasks", repo, storage, meeting_id: int, recording_id: int
+) -> None:
+    if recording_id in _combined_building:
+        return  # a build is already in flight — do NOT restart it
+    _combined_building.add(recording_id)
+
+    async def _run() -> None:
+        try:
+            await finalize_combined_master(repo, storage, meeting_id=meeting_id, recording_id=recording_id)
+        finally:
+            _combined_building.discard(recording_id)
+
+    background_tasks.add_task(_run)
 
 
 def _bearer_token(authorization: Optional[str]) -> str:
@@ -222,6 +245,7 @@ def build_router(
     async def get_recording_master(
         recording_id: int,
         request: Request,
+        background_tasks: BackgroundTasks,
         type: str = "audio",
         x_user_id: Optional[str] = Header(default=None),
     ):
@@ -231,17 +255,39 @@ def build_router(
         rec = next((r for r in recs if r.get("id") == recording_id), None)
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
-        mf = next((m for m in rec.get("media_files", []) if m.get("type") == type), None)
-        master_key = await finalize_master(
-            repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id, media_type=type
-        )
-        if master_key is None:
-            raise HTTPException(status_code=404, detail="No such media file to finalize")
+
+        # ── combined (muxed audio+video): NEVER block on the ffmpeg mux ──────────────────────────
+        # The mux of a long recording takes seconds-to-minutes and would exceed the gateway timeout
+        # (504) — and re-run on every reload. Instead: serve it ONLY if already built; otherwise kick
+        # off ONE guarded background build and return 202. The player plays the silent `video` master
+        # meanwhile and polls this route, swapping to the combined master the moment it is ready.
+        if type == "combined":
+            ready_key = await combined_master_ready_key(
+                repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id
+            )
+            if ready_key is None:
+                _schedule_combined_build(background_tasks, repo, storage, rec["meeting_id"], recording_id)
+                return JSONResponse(
+                    status_code=202,
+                    content={"id": recording_id, "type": "combined", "status": "building",
+                             "media_file_id": None, "raw_url": None},
+                )
+            # ready → fall through to the common resolution below (re-resolve the media-file, return raw_url)
+            master_key = ready_key
+        else:
+            mf = next((m for m in rec.get("media_files", []) if m.get("type") == type), None)
+            master_key = await finalize_master(
+                repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id, media_type=type
+            )
+            if master_key is None:
+                raise HTTPException(status_code=404, detail="No such media file to finalize")
         # Re-resolve the media-file AFTER finalize — for type=combined the media_file is CREATED during
         # finalize (it has no chunks of its own), so the pre-finalize lookup above is stale (None).
         recs = await repo.list_meeting_recordings(user_id)
         rec = next((r for r in recs if r.get("id") == recording_id), rec)
-        mf = next((m for m in rec.get("media_files", []) if m.get("type") == type), mf)
+        # For combined-ready, combined_master_ready_key already stamped the media-file; re-resolve it
+        # fresh (fallback None — `mf` isn't bound on the combined path).
+        mf = next((m for m in rec.get("media_files", []) if m.get("type") == type), None)
         # The dashboard player (api.ts getRecordingMasterStreamUrl) reads ``raw_url`` and streams it via
         # the proxy — the master metadata (``storage_path``) alone is not playable. Point it at the byte
         # route below so playback actually resolves (recordings P3: master byte stream).

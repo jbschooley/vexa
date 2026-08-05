@@ -21,7 +21,12 @@ type Recording = { id?: number; meeting_id?: number | string; media_files?: Medi
 type MasterResponse = { media_file_id?: number | null };
 // Per-track recording start (epoch ms) = the media file's `first_chunk_at` (the bot's true recorder t=0,
 // same clock as the transcript). Video and audio start at different moments, so we anchor per active track.
-type Resolved = { videoSrc: string | null; audioSrc: string | null; videoStartMs: number | null; audioStartMs: number | null };
+type Resolved = {
+  videoSrc: string | null; audioSrc: string | null; videoStartMs: number | null; audioStartMs: number | null;
+  // The recording that carries the video, and whether videoSrc is already the muxed `combined` master
+  // (with sound) or the silent `video` fallback we play while the combined master builds server-side.
+  recId: number | null; videoIsCombined: boolean;
+};
 
 const parseMs = (s?: string): number | null => { if (!s) return null; const t = Date.parse(s); return Number.isFinite(t) ? t : null; };
 
@@ -33,10 +38,12 @@ async function masterUrl(recId: number, type: string, signal: AbortSignal): Prom
   return m.media_file_id != null ? `/api/recording-media?rec=${recId}&mf=${m.media_file_id}&type=${type}` : null;
 }
 
+const EMPTY: Resolved = { videoSrc: null, audioSrc: null, videoStartMs: null, audioStartMs: null, recId: null, videoIsCombined: false };
+
 async function resolveMedia(meetingId: string, signal: AbortSignal): Promise<Resolved> {
   // The recordings list is the authoritative source; GET /recordings returns { recordings: [...] }.
   const listRes = await fetch("/api/recordings", { signal, cache: "no-store" });
-  if (!listRes.ok) return { videoSrc: null, audioSrc: null, videoStartMs: null, audioStartMs: null };
+  if (!listRes.ok) return EMPTY;
   const body = (await listRes.json()) as { recordings?: Recording[] };
   const mine = (body?.recordings ?? []).filter(
     (r) => String(r.meeting_id) === String(meetingId) && r.id != null,
@@ -45,13 +52,20 @@ async function resolveMedia(meetingId: string, signal: AbortSignal): Promise<Res
   let audioSrc: string | null = null;
   let videoStartMs: number | null = null;
   let audioStartMs: number | null = null;
+  let recId: number | null = null;
+  let videoIsCombined = false;
   for (const rec of mine) {
     const files = rec.media_files ?? [];
     const types = new Set(files.map((m) => m.type));
     if (!videoSrc && types.has("video")) {
-      // Prefer the muxed master (has sound); fall back to the silent video-only master. The combined
-      // master shares the video timeline, so anchor both to the raw VIDEO file's start.
-      videoSrc = (await masterUrl(rec.id!, "combined", signal)) || (await masterUrl(rec.id!, "video", signal));
+      // Prefer the muxed master (has sound). When it isn't built yet the server returns 202 (no
+      // media_file_id) so masterUrl is null → play the SILENT video-only master now, remember recId,
+      // and the poll below swaps in the combined master the moment it's ready. Both share the video
+      // timeline, so anchor to the raw VIDEO file's start either way.
+      const combined = await masterUrl(rec.id!, "combined", signal);
+      videoSrc = combined || (await masterUrl(rec.id!, "video", signal));
+      videoIsCombined = !!combined;
+      recId = rec.id!;
       videoStartMs = parseMs(files.find((m) => m.type === "video")?.first_chunk_at);
     }
     if (!audioSrc && types.has("audio")) {
@@ -60,7 +74,7 @@ async function resolveMedia(meetingId: string, signal: AbortSignal): Promise<Res
     }
     if (videoSrc && audioSrc) break;
   }
-  return { videoSrc, audioSrc, videoStartMs, audioStartMs };
+  return { videoSrc, audioSrc, videoStartMs, audioStartMs, recId, videoIsCombined };
 }
 
 export function RecordingPlayer({
@@ -75,13 +89,16 @@ export function RecordingPlayer({
   /** Report resolved tracks up so the header knows whether to show the audio/video toggle. */
   onTracks?: (t: { hasVideo: boolean; hasAudio: boolean }) => void;
 }) {
-  const [media, setMedia] = useState<Resolved>({ videoSrc: null, audioSrc: null, videoStartMs: null, audioStartMs: null });
+  const [media, setMedia] = useState<Resolved>(EMPTY);
   const [state, setState] = useState<"idle" | "loading" | "ready" | "none" | "error">("idle");
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const sync = usePlaybackSync();
   // The active element's live position — read on a toggle to carry the clock to the other element.
   const lastPos = useRef<{ sec: number; playing: boolean }>({ sec: 0, playing: false });
+  // A position to restore after the NEXT video src change — set when the silent video is swapped for
+  // the combined master, so playback continues from where the viewer was instead of jumping to 0.
+  const pendingSeek = useRef<{ sec: number; playing: boolean } | null>(null);
   // Which element the last effect wired — a CHANGE means a toggle (preserve position), null = first mount.
   const prevShowAudio = useRef<boolean | null>(null);
   // Whichever element is currently mounted — the seek handler reads this so one registration spans toggles.
@@ -100,6 +117,32 @@ export function RecordingPlayer({
       .catch((e) => { if (!ctrl.signal.aborted && e?.name !== "AbortError") setState("error"); });
     return () => ctrl.abort();
   }, [meetingId]);
+
+  // While showing the SILENT video fallback, poll the combined master until the server has built it,
+  // then swap it in (carrying the current position). The server returns 202 until ready and builds
+  // ONCE in the background, so this poll never restarts the mux. Stops on unmount / once combined.
+  useEffect(() => {
+    if (state !== "ready" || media.recId == null || media.videoIsCombined || !media.videoSrc) return;
+    const recId = media.recId;
+    const ctrl = new AbortController();
+    let stopped = false;
+    let attempts = 0;
+    const tick = async () => {
+      while (!stopped && attempts < 120) {   // ~10 min ceiling (5s cadence) — then give up quietly
+        attempts += 1;
+        await new Promise((r) => setTimeout(r, 5000));
+        if (stopped) return;
+        const url = await masterUrl(recId, "combined", ctrl.signal).catch(() => null);
+        if (stopped || !url) continue;
+        const v = videoRef.current;
+        pendingSeek.current = v ? { sec: v.currentTime, playing: !v.paused } : null;
+        setMedia((prev) => ({ ...prev, videoSrc: url, videoIsCombined: true }));
+        return;
+      }
+    };
+    void tick();
+    return () => { stopped = true; ctrl.abort(); };
+  }, [state, media.recId, media.videoIsCombined, media.videoSrc]);
 
   const hasVideo = !!media.videoSrc;
   const hasAudio = !!media.audioSrc;
@@ -132,10 +175,12 @@ export function RecordingPlayer({
     el.addEventListener("play", onTime);
     el.addEventListener("pause", onTime);
     // A CHANGE of active element (not the first mount) is a toggle → carry the position + play state over.
+    // A pending seek (the silent-video → combined-master swap) restores position on the SAME element.
     const isToggle = prevShowAudio.current !== null && prevShowAudio.current !== showAudio;
     prevShowAudio.current = showAudio;
-    if (isToggle) {
-      const pos = lastPos.current;
+    const swap = pendingSeek.current; pendingSeek.current = null;
+    if (isToggle || swap) {
+      const pos = swap ?? lastPos.current;
       const restore = () => { el.currentTime = pos.sec; if (pos.playing) void el.play(); };
       if (el.readyState >= 1) restore(); else el.addEventListener("loadedmetadata", restore, { once: true });
     }
