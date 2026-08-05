@@ -106,6 +106,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && usermod -aG pulse-access root 2>/dev/null || true \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Optional NVIDIA VA-API decode shim (nvidia-vaapi-driver) for BROWSER_HWACCEL=nvidia. The apt set above
+# ships va-driver-all (AMD/Intel VA-API) but jammy has NO nvidia-vaapi-driver package, so it is built from
+# source — GATED behind a build ARG (default off) so the standard image is byte-unchanged and other hosts
+# are unaffected. Enable via the compose build arg on a host that ALSO exposes the GPU with the 'graphics'
+# capability + sets BROWSER_HWACCEL=nvidia (else Chromium silently falls back to SwiftShader). Uses the EGL
+# backend (jammy's libva 2.14 predates the 2.20 direct backend) — pair with NVD_BACKEND=egl at runtime.
+ARG VAAPI_NVIDIA=false
+RUN if [ "$VAAPI_NVIDIA" = "true" ]; then set -eux; \
+      apt-get update && apt-get install -y --no-install-recommends \
+        git build-essential meson ninja-build pkg-config libva-dev libdrm-dev libegl-dev libgl-dev; \
+      git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git /tmp/nvch && make -C /tmp/nvch install; \
+      git clone --depth 1 -b v0.0.12 https://github.com/elFarto/nvidia-vaapi-driver.git /tmp/nvd; \
+      meson setup --prefix=/usr /tmp/nvd/build /tmp/nvd && meson install -C /tmp/nvd/build; \
+      rm -rf /tmp/nvch /tmp/nvd; \
+      apt-get purge -y meson ninja-build libva-dev libdrm-dev libegl-dev libgl-dev && apt-get autoremove -y; \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+      test -e /usr/lib/x86_64-linux-gnu/dri/nvidia_drv_video.so; \
+      # Register the NVIDIA EGL vendor with glvnd. The 'graphics' capability mounts libEGL_nvidia but NOT
+      # this ICD json, so without it libEGL only loads mesa → the CUDA-capable EGL device never appears and
+      # the driver's init fails ("No EGL_CUDA_DEVICE_NV support"). With it, vainfo enumerates NVDEC decode.
+      mkdir -p /usr/share/glvnd/egl_vendor.d; \
+      printf '%s' '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}' \
+        > /usr/share/glvnd/egl_vendor.d/10_nvidia.json; \
+    fi
+
 # Valkey 8.1.9 (BSD-3) — the internal cache/stream store, glibc-matched from valkey-builder. Ships
 # valkey-server + valkey-cli on PATH (supervisord runs valkey-server; healthchecks use valkey-cli),
 # with the license notice traveling next to the bytes (THIRD_PARTY_LICENSES.md, per-release SBOM).
