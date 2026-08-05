@@ -22,6 +22,27 @@ export const CDP_DEBUG_ARGS = [
 ];
 
 /**
+ * GPU launch flags for the host's BROWSER_HWACCEL mode. Default (none / unknown) = the measured
+ * software setup (--disable-gpu + --in-process-gpu + VizDisplayCompositor off); a hardware mode turns
+ * on Chromium's VA-API decoder so incoming video decodes on the GPU instead of the CPU.
+ *
+ * DUPLICATED (deliberately) from @vexa/join's getGpuBrowserArgs — this brick has no @vexa/join dep and
+ * must stay self-contained (isolation law). The CONTRACT is the shared BROWSER_HWACCEL env var; keep the
+ * two readers in sync. A meeting launch concatenates both bricks' args, so identical flags simply dedup.
+ */
+function getGpuArgs(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = (env.BROWSER_HWACCEL || '').trim().toLowerCase();
+  const hardware = raw !== '' && raw !== 'none' && raw !== 'software' && raw !== 'off' && raw !== 'cpu';
+  if (!hardware) return ['--disable-gpu', '--in-process-gpu', '--disable-features=VizDisplayCompositor'];
+  return [
+    '--ignore-gpu-blocklist',
+    '--enable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL',
+    '--use-gl=angle',
+    '--use-angle=gl',
+  ];
+}
+
+/**
  * Browser args for authenticated bot mode (persistent context with stored cookies).
  * Minimal, clean flags — aggressive flags like --disable-web-security and
  * --ignore-certificate-errors trigger Google's bot detection and cause "You can't
@@ -33,13 +54,11 @@ export function getAuthenticatedBrowserArgs(): string[] {
     '--disable-setuid-sandbox',
     '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
-    '--disable-gpu',
     '--disable-features=IsolateOrigins,site-per-process',
     '--disable-site-isolation-trials',
-    '--in-process-gpu',
     '--use-fake-ui-for-media-stream',
     '--use-file-for-fake-video-capture=/dev/null',
-    '--disable-features=VizDisplayCompositor',
+    ...getGpuArgs(),
     '--password-store=basic',
   ];
 }

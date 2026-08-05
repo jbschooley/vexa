@@ -23,6 +23,7 @@
  * lazy redis connect.
  */
 import { createClient } from 'redis';
+import { initBrowserHwaccelEnv } from '@vexa/join';
 import { loadInvocation, InvocationError, speakerStreamConfigFromEnv, type Invocation } from './config.js';
 import type { Act, LifecycleEvent } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
@@ -161,6 +162,10 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     }
     throw e;
   }
+
+  // Browser GPU mode (BROWSER_HWACCEL): force LIBVA_DRIVER_NAME=nvidia for the nvidia shim when the host
+  // hasn't set it, BEFORE the browser launches (it inherits process.env). No-op for software/amd/intel.
+  initBrowserHwaccelEnv(env);
 
   // ── build the LIVE transports → the pure orchestrator ──
   const meetingId = meetingChannelId(inv);
