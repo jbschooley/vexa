@@ -114,7 +114,7 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
   const label = effectiveLive ? `Processing ${processing ? "on" : "off"}` : (processing ? "Processed" : "Raw");
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--bg)" }}>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--bg)", containerType: "inline-size" }}>
       <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 10, padding: `8px ${MEETING_CANVAS_CONTENT_INSET}px 0` }}>
         <button
           type="button"
@@ -149,18 +149,22 @@ function MeetingCanvasBody({ meetingId }: { meetingId?: string }) {
       </div>
       <MeetingHealthBanner />
       <PlaybackSyncProvider scrollerRef={scrollerRef}>
-        {/* The player sits ABOVE the scroller (flex:none) so it stays put while the transcript scrolls;
-            it's still inside the provider so it can register its seek handler for the transcript. */}
-        {durableTerminal && (
-          <div style={{ flex: "none", padding: `4px ${MEETING_CANVAS_CONTENT_INSET}px 0` }}>
-            <RecordingPlayer meetingId={meetingId} preferAudio={preferAudio} onTracks={setTracks} />
-          </div>
-        )}
-        <main ref={scrollerRef} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-          <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
-            {processing ? <ProcessedTranscript live={effectiveLive} /> : <RawTranscript live={effectiveLive} />}
-          </div>
-        </main>
+        {/* Player + transcript: stacked by default, side-by-side on wide screens (.rec-layout, globals.css)
+            so a wide viewport gives the transcript its own column instead of a full-width video hiding it.
+            The player stays put while the transcript scrolls; it's inside the provider so it can register
+            its seek handler for the transcript. */}
+        <div className={`rec-layout${tracks.hasVideo && !preferAudio ? " rec-has-video" : ""}`}>
+          {durableTerminal && (
+            <div className="rec-player" style={{ padding: `4px ${MEETING_CANVAS_CONTENT_INSET}px 0` }}>
+              <RecordingPlayer meetingId={meetingId} preferAudio={preferAudio} onTracks={setTracks} />
+            </div>
+          )}
+          <main ref={scrollerRef} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+            <div style={{ padding: MEETING_CANVAS_CONTENT_INSET }}>
+              {processing ? <ProcessedTranscript live={effectiveLive} /> : <RawTranscript live={effectiveLive} />}
+            </div>
+          </main>
+        </div>
       </PlaybackSyncProvider>
     </div>
   );
