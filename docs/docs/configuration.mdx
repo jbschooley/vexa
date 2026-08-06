@@ -113,6 +113,8 @@ by default — set `RECORD_VIDEO=true` (or `record_video: true` on a single `POS
 | `VIDEO_HWACCEL` | `none` | Video encoder. `none` → software VP9 (webm). `vaapi` → Intel/AMD VA-API H.264 (mp4; needs `/dev/dri` passthrough). `nvenc` → NVIDIA NVENC H.264 (mp4; needs the nvidia runtime). |
 | `ENCODE_H264` | `false` | When `true` and `VIDEO_HWACCEL=none`, encode CPU H.264 (mp4, Safari-friendly) instead of VP9 (webm). |
 | `VIDEO_RESOLUTION` | `1920x1080` | Capture resolution as `WIDTHxHEIGHT`, e.g. `1280x800`. Sizes the bot's virtual display, the browser window, and the x11grab region together; a lower resolution cuts encode CPU roughly in proportion to the pixel count. |
+| `RECORDING_COMBINED_AUDIO_CODEC` | (native) | Audio codec for the muxed audio+video master. Empty re-encodes to the container's native codec (aac for mp4, opus for webm) — playable everywhere. `copy` stream-copies the source opus straight into mp4 (near-instant, no transcode) when every client can play opus-in-mp4. |
+| `BOT_AUTO_CONSENT` | `false` | When `1`, the bot auto-accepts the "this meeting is being recorded" consent prompt (Google Meet / Zoom). The default escalates to a human instead — consent is the user's choice. |
 
 ## Secrets & identity
 

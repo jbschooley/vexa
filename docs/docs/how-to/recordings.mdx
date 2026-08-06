@@ -4,7 +4,7 @@ description: "List recordings and stream the audio — from your own object stor
 ---
 
 <Note>
-Recording retrieval is **API-only today** — the terminal has no built-in player yet. The endpoints below
+Recordings are captured as **audio + video** and served as one muxed master (webm or mp4, per the [encode settings](/configuration#recording)). The terminal has a built-in **player** — a video/audio toggle, seeking, and transcript sync — on any completed meeting's canvas. The endpoints below
 are live and covered by service tests. Browser playback and seeking work **through the gateway**: a `Range`
 request returns a `206 Partial Content` with its `Content-Range` and `Accept-Ranges` headers intact.
 See the [capability truth table](/roadmap/status#capability-truth-table).
