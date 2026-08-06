@@ -222,6 +222,13 @@
    "targets": []
   },
   {
+   "key": "VIDEO_RESOLUTION",
+   "class": "defaulted",
+   "default": "1920x1080",
+   "description": "video-recording capture resolution as WIDTHxHEIGHT, forwarded to the spawned bot (extra_env). Drives the bot's Xvfb screen, the Chromium --window-size, and ffmpeg's x11grab -video_size together (all three must match). Lower resolution cuts encode CPU roughly in proportion to the pixel count — e.g. 1280x800. Default 1920x1080; forwarded only when set",
+   "targets": []
+  },
+  {
    "key": "MINIO_ENDPOINT",
    "class": "defaulted",
    "default": "minio:9000",

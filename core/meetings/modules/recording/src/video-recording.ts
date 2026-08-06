@@ -283,7 +283,7 @@ export class VideoRecordingService {
 
   private buildFfmpegArgs(): string[] {
     const fps = '10';
-    const inputSize = '1920x1080';
+    const inputSize = `${process.env.VEXA_VIDEO_WIDTH || '1920'}x${process.env.VEXA_VIDEO_HEIGHT || '1080'}`;
 
     // Pre-input args (e.g. hwaccel flags that must appear before -i)
     let preInputArgs: string[] = [];

@@ -41,7 +41,7 @@ function makeStubBin(root: string): string {
 interface RunResult { code: number | null; stdout: string; }
 
 /** Run the real entrypoint.sh with a stub worker; optionally SIGTERM the LEADER (docker-style). */
-function runEntrypoint(workerJs: string, opts: { sigtermAfterMs?: number } = {}): Promise<RunResult> {
+function runEntrypoint(workerJs: string, opts: { sigtermAfterMs?: number; env?: Record<string, string> } = {}): Promise<RunResult> {
   const root = mkdtempSync(join(tmpdir(), 'bot-entrypoint-'));
   const bin = makeStubBin(root);
   const appDir = join(root, 'app');
@@ -55,6 +55,7 @@ function runEntrypoint(workerJs: string, opts: { sigtermAfterMs?: number } = {})
       BOT_APP_DIR: appDir,
       BOT_WORKER_ENTRY: 'worker.cjs',
       DISPLAY: ':99',
+      ...opts.env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true, // its own process group — SIGTERM hits ONLY the leader, like docker's PID 1
@@ -111,6 +112,26 @@ const main = async () => {
     const r = await runEntrypoint(PLAIN_EXIT_WORKER);
     check('a normal worker exit propagates its code unchanged', r.code === 7, `exit=${r.code}`);
     check('exit breadcrumb carries the code', r.stdout.includes('worker exited with code 7'), r.stdout.slice(-400));
+  }
+  {
+    const r = await runEntrypoint(PLAIN_EXIT_WORKER);
+    check('unset VIDEO_RESOLUTION defaults the screen to 1920x1080',
+      r.stdout.includes('screen 1920x1080'), r.stdout.slice(-400));
+  }
+  {
+    const r = await runEntrypoint(PLAIN_EXIT_WORKER, { env: { VIDEO_RESOLUTION: '1280x800' } });
+    check('VIDEO_RESOLUTION=1280x800 → 1280x800 screen',
+      r.stdout.includes('screen 1280x800'), r.stdout.slice(-400));
+  }
+  {
+    const r = await runEntrypoint(PLAIN_EXIT_WORKER, { env: { VIDEO_RESOLUTION: '800' } });
+    check('a bare height (no WIDTHxHEIGHT) is rejected → 1920x1080',
+      r.stdout.includes('screen 1920x1080'), r.stdout.slice(-400));
+  }
+  {
+    const r = await runEntrypoint(PLAIN_EXIT_WORKER, { env: { VIDEO_RESOLUTION: 'garbage' } });
+    check('invalid VIDEO_RESOLUTION falls back to 1920x1080',
+      r.stdout.includes('screen 1920x1080'), r.stdout.slice(-400));
   }
 };
 

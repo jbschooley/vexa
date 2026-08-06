@@ -439,15 +439,18 @@ async def request_bot(
     )
 
     # 5. Spawn over runtime.v1.
-    # Video encoder selection for server-side recording: sourced from the meeting-api process env so a
-    # deployment picks CPU vs GPU encode per host. The bot's VideoRecordingService reads these at
-    # construction (defaults: software VP9/webm). Only forwarded when set — unset ⇒ the bot's defaults,
-    # so audio-only / no-GPU deployments carry no extra env.
+    # Video recording knobs for server-side recording: sourced from the meeting-api process env so a
+    # deployment tunes encode (CPU vs GPU) and capture resolution per host. The bot reads these — the
+    # encoder at VideoRecordingService construction (defaults: software VP9/webm), the resolution in its
+    # entrypoint (default 1920x1080). Only forwarded when set — unset ⇒ the bot's defaults, so
+    # audio-only / no-GPU deployments carry no extra env.
     video_env: dict[str, str] = {}
     if os.getenv("VIDEO_HWACCEL"):
         video_env["VIDEO_HWACCEL"] = os.environ["VIDEO_HWACCEL"]
     if os.getenv("ENCODE_H264"):
         video_env["ENCODE_H264"] = os.environ["ENCODE_H264"]
+    if os.getenv("VIDEO_RESOLUTION"):
+        video_env["VIDEO_RESOLUTION"] = os.environ["VIDEO_RESOLUTION"]
 
     spec = build_workload_spec(
         workload_id=f"mtg-{meeting_id}-{connection_id[:8]}",
