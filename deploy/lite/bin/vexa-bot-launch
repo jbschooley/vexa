@@ -25,9 +25,19 @@
 # concurrent recording on the single-host lite deployment.
 set -u
 
-# MUST stay 1920x1080 — VideoRecordingService's x11grab uses `-video_size 1920x1080`; a
-# mismatched Xvfb geometry makes ffmpeg grab the wrong region (or error).
-SCREEN_GEOM="1920x1080x24"
+# Recording resolution — VIDEO_RESOLUTION (WIDTHxHEIGHT, default 1920x1080) sizes THIS bot's private
+# display, exported as VEXA_VIDEO_WIDTH/HEIGHT so the worker's ffmpeg x11grab (-video_size) and the
+# Chromium --window-size match it. All three MUST agree or x11grab grabs the wrong region.
+VIDEO_RESOLUTION="${VIDEO_RESOLUTION:-1920x1080}"
+if printf '%s' "${VIDEO_RESOLUTION}" | grep -qE '^[0-9]+x[0-9]+$'; then
+  VIDEO_W="${VIDEO_RESOLUTION%x*}"; VIDEO_H="${VIDEO_RESOLUTION#*x}"
+else
+  echo "[bot-launch] WARN invalid VIDEO_RESOLUTION='${VIDEO_RESOLUTION}' (want WIDTHxHEIGHT) -> 1920x1080" >&2
+  VIDEO_W=1920; VIDEO_H=1080
+fi
+VIDEO_W=$(( VIDEO_W - VIDEO_W % 2 )); VIDEO_H=$(( VIDEO_H - VIDEO_H % 2 ))  # yuv420p needs even dims
+SCREEN_GEOM="${VIDEO_W}x${VIDEO_H}x24"
+export VEXA_VIDEO_WIDTH="${VIDEO_W}" VEXA_VIDEO_HEIGHT="${VIDEO_H}"
 
 XVFB_PID=""
 FLUXBOX_PID=""
@@ -66,6 +76,8 @@ else
   [ -n "${XVFB_PID}" ] && kill "${XVFB_PID}" 2>/dev/null
   XVFB_PID=""
   export DISPLAY="${DISPLAY:-:99}"
+  # Shared :99 is fixed at 1920x1080 (supervisord) — match the capture dims so x11grab doesn't crop.
+  export VEXA_VIDEO_WIDTH=1920 VEXA_VIDEO_HEIGHT=1080
   echo "[bot-launch] private display alloc failed — using shared ${DISPLAY} (concurrent video may cross-capture)"
 fi
 

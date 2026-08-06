@@ -12,8 +12,23 @@ set -u
 
 export DISPLAY="${DISPLAY:-:99}"
 
-echo "[entrypoint] Starting Xvfb on ${DISPLAY}..."
-Xvfb "${DISPLAY}" -screen 0 1920x1080x24 >/tmp/xvfb.log 2>&1 &
+# Recording resolution — ONE knob (VIDEO_RESOLUTION, WIDTHxHEIGHT, default 1920x1080)
+# sizes the Xvfb screen here; the Chromium window + ffmpeg x11grab on the node side read
+# the resolved dims below. All three must agree or x11grab captures a crop. Lower
+# resolution ⇒ fewer pixels to encode ⇒ ~proportionally less CPU.
+VIDEO_RESOLUTION="${VIDEO_RESOLUTION:-1920x1080}"
+if printf '%s' "${VIDEO_RESOLUTION}" | grep -qE '^[0-9]+x[0-9]+$'; then
+  VIDEO_W="${VIDEO_RESOLUTION%x*}"; VIDEO_H="${VIDEO_RESOLUTION#*x}"
+else
+  echo "[entrypoint] WARN invalid VIDEO_RESOLUTION='${VIDEO_RESOLUTION}' (want WIDTHxHEIGHT) -> 1920x1080" >&2
+  VIDEO_W=1920; VIDEO_H=1080
+fi
+VIDEO_W=$(( VIDEO_W - VIDEO_W % 2 )); VIDEO_H=$(( VIDEO_H - VIDEO_H % 2 ))  # yuv420p needs even dims
+# Canonical resolved dims the node side consumes (browser --window-size, ffmpeg -video_size).
+export VEXA_VIDEO_WIDTH="${VIDEO_W}" VEXA_VIDEO_HEIGHT="${VIDEO_H}"
+
+echo "[entrypoint] Starting Xvfb on ${DISPLAY} (screen ${VIDEO_W}x${VIDEO_H})..."
+Xvfb "${DISPLAY}" -screen 0 "${VIDEO_W}x${VIDEO_H}x24" >/tmp/xvfb.log 2>&1 &
 # Give Xvfb a moment to create the socket before anything attaches.
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   [ -e "/tmp/.X11-unix/X${DISPLAY#:}" ] && break

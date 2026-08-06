@@ -44,9 +44,15 @@ export function getLocaleBrowserArgs(): string[] {
   return [`--lang=${locale}`, `--accept-lang=${acceptLang}`];
 }
 
+// Chromium window size — matches the Xvfb screen the bot entrypoint sized from
+// VIDEO_RESOLUTION (VEXA_VIDEO_WIDTH/HEIGHT). Outside that container (tests, the debug
+// harness, local dev) the vars are unset and it falls back to 1080p, today's behavior.
+const VIDEO_W = process.env.VEXA_VIDEO_WIDTH || "1920";
+const VIDEO_H = process.env.VEXA_VIDEO_HEIGHT || "1080";
+
 export const JOIN_BROWSER_ARGS: readonly string[] = [
   "--window-position=0,0",
-  "--window-size=1920,1080",
+  `--window-size=${VIDEO_W},${VIDEO_H}`,
   "--start-fullscreen",
   "--incognito",
   "--no-sandbox",
