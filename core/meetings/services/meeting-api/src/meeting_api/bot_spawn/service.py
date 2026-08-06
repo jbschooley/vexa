@@ -159,6 +159,7 @@ async def request_bot(
     task: Optional[str] = None,
     transcription_tier: str = "realtime",
     recording_enabled: bool = False,
+    record_video: bool = False,
     transcribe_enabled: bool = True,
     automatic_leave: Optional[dict] = None,
     continue_meeting: bool = False,
@@ -478,7 +479,9 @@ async def request_bot(
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
         recording_enabled=recording_enabled,
-        capture_modes=(["audio", "video"] if recording_enabled else None),
+        # Audio always; video only when record_video (RECORD_VIDEO) is on. record_video=False → audio-only:
+        # wantsVideoCapture reads captureModes, so ["audio"] skips the x11grab while the audio tap runs.
+        capture_modes=((["audio", "video"] if record_video else ["audio"]) if recording_enabled else None),
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
         authenticated=True if authenticated else None,
         userdata_s3_path=auth_userdata_path,

@@ -76,6 +76,24 @@ def _resolve_recording_enabled(value: Optional[object]) -> bool:
     raise HTTPException(status_code=422, detail="recording_enabled must be a boolean")
 
 
+def _resolve_record_video(value: Optional[object]) -> bool:
+    """Whether a recording includes the VIDEO track: an explicit request value wins; else the
+    ``RECORD_VIDEO`` env (default ``false`` → AUDIO ONLY: the server-side x11grab is skipped while the
+    audio tap still runs). Set ``true`` to also capture video. Type-validated like ``recording_enabled``;
+    only consulted when recording is on."""
+    if value is None:
+        return env_flag("RECORD_VIDEO", False)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "1", "yes", "on"):
+            return True
+        if v in ("false", "0", "no", "off", ""):
+            return False
+    raise HTTPException(status_code=422, detail="record_video must be a boolean")
+
+
 def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
     """Transcription default: an explicit request value wins; else the ``TRANSCRIBE_ENABLED`` env
     (default ``true``). Type-validated like ``recording_enabled`` (CC3) — a bare ``bool(...)`` turned the
@@ -406,6 +424,7 @@ def build_router(
                 task=body.get("task"),
                 transcription_tier=body.get("transcription_tier", "realtime"),
                 recording_enabled=_resolve_recording_enabled(body.get("recording_enabled")),
+                record_video=_resolve_record_video(body.get("record_video")),
                 transcribe_enabled=transcribe_enabled,
                 automatic_leave=_resolve_automatic_leave(body.get("automatic_leave")),
                 # P3c — continue_meeting is accepted off the OPEN api.v1 request body (MeetingCreate

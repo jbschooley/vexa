@@ -102,13 +102,14 @@ redirect this operator callback. Leave all four values unset for the stock OSS b
 
 ## Recording
 
-Server-side capture of the meeting — audio (a browser tap) **and** video (an `ffmpeg` x11grab of the
-bot's virtual display), muxed into one downloadable master. Turn recording on per spawn or with
-`RECORDING_ENABLED` (above); these variables tune HOW it is captured. Recording currently always
-captures both audio and video together (there is no audio-only toggle yet).
+Server-side capture of the meeting — audio (a browser tap), optionally with video (an `ffmpeg` x11grab
+of the bot's virtual display), muxed into one downloadable master. Turn recording on per spawn or with
+`RECORDING_ENABLED` (above); these variables tune HOW it is captured. Recordings capture **audio only**
+by default — set `RECORD_VIDEO=true` (or `record_video: true` on a single `POST /bots`) to also record video.
 
 | Variable | Default | Description |
 |---|---|---|
+| `RECORD_VIDEO` | `false` | Whether a recording includes the video track. Default records **audio only** (the server-side x11grab is skipped; the audio tap still runs); `true` also captures video. A `POST /bots` `record_video` overrides it per meeting (request → this env → `false`). Only consulted when recording is on. |
 | `VIDEO_HWACCEL` | `none` | Video encoder. `none` → software VP9 (webm). `vaapi` → Intel/AMD VA-API H.264 (mp4; needs `/dev/dri` passthrough). `nvenc` → NVIDIA NVENC H.264 (mp4; needs the nvidia runtime). |
 | `ENCODE_H264` | `false` | When `true` and `VIDEO_HWACCEL=none`, encode CPU H.264 (mp4, Safari-friendly) instead of VP9 (webm). |
 | `VIDEO_RESOLUTION` | `1920x1080` | Capture resolution as `WIDTHxHEIGHT`, e.g. `1280x800`. Sizes the bot's virtual display, the browser window, and the x11grab region together; a lower resolution cuts encode CPU roughly in proportion to the pixel count. |

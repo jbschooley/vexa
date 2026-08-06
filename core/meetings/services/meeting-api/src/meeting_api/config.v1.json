@@ -229,6 +229,13 @@
    "targets": []
   },
   {
+   "key": "RECORD_VIDEO",
+   "class": "defaulted",
+   "default": "false",
+   "description": "deployment default for whether a recording includes the VIDEO track. Resolution: explicit POST /bots `record_video` wins → else this env → else false. Default records AUDIO ONLY (the server-side x11grab is skipped; the audio tap still runs); true also captures video. Only consulted when recording is on. Read by meeting-api at spawn to set the bot's capture_modes",
+   "targets": []
+  },
+  {
    "key": "MINIO_ENDPOINT",
    "class": "defaulted",
    "default": "minio:9000",
