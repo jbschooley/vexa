@@ -100,6 +100,19 @@ Transient delivery failures enter a dedicated retry/dead-letter queue and retain
 deterministic event ID. Customer webhook destinations continue through DNS/IP validation and cannot
 redirect this operator callback. Leave all four values unset for the stock OSS behavior.
 
+## Recording
+
+Server-side capture of the meeting — audio (a browser tap) **and** video (an `ffmpeg` x11grab of the
+bot's virtual display), muxed into one downloadable master. Turn recording on per spawn or with
+`RECORDING_ENABLED` (above); these variables tune HOW it is captured. Recording currently always
+captures both audio and video together (there is no audio-only toggle yet).
+
+| Variable | Default | Description |
+|---|---|---|
+| `VIDEO_HWACCEL` | `none` | Video encoder. `none` → software VP9 (webm). `vaapi` → Intel/AMD VA-API H.264 (mp4; needs `/dev/dri` passthrough). `nvenc` → NVIDIA NVENC H.264 (mp4; needs the nvidia runtime). |
+| `ENCODE_H264` | `false` | When `true` and `VIDEO_HWACCEL=none`, encode CPU H.264 (mp4, Safari-friendly) instead of VP9 (webm). |
+| `VIDEO_RESOLUTION` | `1920x1080` | Capture resolution as `WIDTHxHEIGHT`, e.g. `1280x800`. Sizes the bot's virtual display, the browser window, and the x11grab region together; a lower resolution cuts encode CPU roughly in proportion to the pixel count. |
+
 ## Secrets & identity
 
 | Variable | Default | Purpose |
