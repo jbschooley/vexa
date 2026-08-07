@@ -508,6 +508,10 @@ async def request_bot(
         video_env["ENCODE_H264"] = os.environ["ENCODE_H264"]
     if os.getenv("VIDEO_RESOLUTION"):
         video_env["VIDEO_RESOLUTION"] = os.environ["VIDEO_RESOLUTION"]
+    # Browser GPU mode for the spawned bot (exp/gpu-browser-decode): 'none' (default, software) |
+    # nvidia/vaapi (VA-API decode) | vulkan (GPU rasterization via ANGLE-over-Vulkan). Only forwarded when set.
+    if os.getenv("BROWSER_HWACCEL"):
+        video_env["BROWSER_HWACCEL"] = os.environ["BROWSER_HWACCEL"]
 
     spec = build_workload_spec(
         workload_id=f"mtg-{meeting_id}-{connection_id[:8]}",

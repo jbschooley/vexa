@@ -238,6 +238,13 @@
    "targets": []
   },
   {
+   "key": "BROWSER_HWACCEL",
+   "class": "defaulted",
+   "default": "none",
+   "description": "EXPERIMENTAL (exp/gpu-browser-decode): browser GPU mode forwarded to the bot (extra_env). 'none' (default) = software (--disable-gpu). 'nvidia'/'vaapi' = VA-API video DECODE on the GPU (needs the VAAPI_NVIDIA image + the graphics GPU capability). 'vulkan' = GPU RASTERIZATION via ANGLE-over-Vulkan (offloads the compositing that saturates CPU). Only forwarded when set; verify the mode is actually live at chrome://gpu",
+   "targets": []
+  },
+  {
    "key": "RECORD_VIDEO",
    "class": "defaulted",
    "default": "false",
