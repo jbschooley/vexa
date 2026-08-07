@@ -115,8 +115,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG VAAPI_NVIDIA=false
 RUN if [ "$VAAPI_NVIDIA" = "true" ]; then set -eux; \
       apt-get update && apt-get install -y --no-install-recommends \
-        git build-essential meson ninja-build pkg-config libva-dev libdrm-dev libegl-dev libgl-dev \
-        libvulkan1; \
+        git build-essential meson ninja-build pkg-config libva-dev libdrm-dev libegl-dev libgl-dev; \
 
       git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git /tmp/nvch && make -C /tmp/nvch install; \
       git clone --depth 1 -b v0.0.12 https://github.com/elFarto/nvidia-vaapi-driver.git /tmp/nvd; \
@@ -131,9 +130,19 @@ RUN if [ "$VAAPI_NVIDIA" = "true" ]; then set -eux; \
       mkdir -p /usr/share/glvnd/egl_vendor.d; \
       printf '%s' '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}' \
         > /usr/share/glvnd/egl_vendor.d/10_nvidia.json; \
-      # Register the NVIDIA Vulkan ICD for BROWSER_HWACCEL=vulkan (GPU rasterization via ANGLE-over-Vulkan).
-      # The 'graphics' capability mounts libGLX_nvidia (NVIDIA's Vulkan driver) but NOT this json, so the
-      # Vulkan loader (libvulkan1) needs it to find the ICD — else ANGLE-Vulkan falls back to SwiftShader.
+    fi
+
+# Optional NVIDIA Vulkan for BROWSER_HWACCEL=vulkan (GPU RASTERIZATION via ANGLE-over-Vulkan) — INDEPENDENT
+# of the VA-API decode shim above. NVIDIA's Vulkan driver is PREBUILT and mounted from the host by the NVIDIA
+# container runtime when the GPU is exposed with the 'graphics' capability — nothing is compiled here. All the
+# image needs is the Vulkan loader (a normal apt package) and the ICD json pointing it at the mounted
+# libGLX_nvidia (the 'graphics' capability mounts the library but NOT this json, so without it the loader finds
+# no ICD and ANGLE-Vulkan silently falls back to SwiftShader). GATED behind its own ARG (default off) so the
+# standard image is byte-unchanged; enable via the compose build arg alongside BROWSER_HWACCEL=vulkan.
+ARG BROWSER_VULKAN=false
+RUN if [ "$BROWSER_VULKAN" = "true" ]; then set -eux; \
+      apt-get update && apt-get install -y --no-install-recommends libvulkan1; \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
       mkdir -p /usr/share/vulkan/icd.d; \
       printf '%s' '{"file_format_version":"1.0.0","ICD":{"library_path":"libGLX_nvidia.so.0","api_version":"1.3.0"}}' \
         > /usr/share/vulkan/icd.d/nvidia_icd.json; \
