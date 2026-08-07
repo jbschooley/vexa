@@ -238,6 +238,13 @@
    "targets": []
   },
   {
+   "key": "VIDEO_CAPTURE",
+   "class": "defaulted",
+   "default": "x11grab",
+   "description": "PROTOTYPE (proto/screencast-recording): video capture source, forwarded to the bot (extra_env). 'x11grab' (default) reads the Xvfb framebuffer via ffmpeg — heavy (continuous full-frame software render + readback). 'screencast' feeds CDP compositor JPEG frames into ffmpeg's stdin — no framebuffer readback, damage-driven, far lighter on CPU (fixes recording-starves-audio). Only forwarded when set",
+   "targets": []
+  },
+  {
    "key": "RECORD_VIDEO",
    "class": "defaulted",
    "default": "false",

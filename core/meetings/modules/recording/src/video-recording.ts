@@ -36,6 +36,11 @@ export class VideoRecordingService {
   private display: string;
   private hwaccel: VideoHwAccel;
   private encodeH264: boolean;
+  // PROTOTYPE: capture source. 'x11grab' (default) reads the Xvfb framebuffer — heavy (continuous
+  // full-frame software render + ~60MB/s readback). 'screencast' reads compositor JPEG frames the
+  // bot pushes via writeFrame() (CDP Page.startScreencast) into ffmpeg's stdin — no framebuffer
+  // readback, damage-driven. Off the CPU that starves the audio thread. See proto/screencast-recording.
+  private capture: 'x11grab' | 'screencast';
 
   constructor(
     private meetingId: number,
@@ -44,8 +49,20 @@ export class VideoRecordingService {
     this.display = process.env.DISPLAY || ':99';
     this.hwaccel = (process.env.VIDEO_HWACCEL || 'none').toLowerCase() as VideoHwAccel;
     this.encodeH264 = process.env.ENCODE_H264 === 'true';
+    this.capture = (process.env.VIDEO_CAPTURE || 'x11grab').toLowerCase() === 'screencast' ? 'screencast' : 'x11grab';
     this.format = (this.hwaccel === 'none' && !this.encodeH264) ? 'webm' : 'mp4';
     this.filePath = path.join('/tmp', `video_recording_${meetingId}_${sessionUid}.${this.format}`);
+  }
+
+  /** True when this recorder ingests compositor frames (bot pushes them via writeFrame). */
+  isScreencast(): boolean { return this.capture === 'screencast'; }
+
+  /** Screencast mode: push one JPEG frame (a CDP Page.screencastFrame payload) into ffmpeg's stdin.
+   *  Best-effort — drops the frame if the pipe is full/closed (never throws into the capture loop). */
+  writeFrame(jpeg: Buffer): void {
+    const stdin = this.ffmpegProcess?.stdin;
+    if (this.capture !== 'screencast' || !stdin || !stdin.writable) return;
+    try { stdin.write(jpeg); } catch { /* backpressure/closed — drop */ }
   }
 
   start(): void {
@@ -58,8 +75,10 @@ export class VideoRecordingService {
     log(`[VideoRecording] Starting ffmpeg (hwaccel=${this.hwaccel}): ffmpeg ${args.join(' ')}`);
 
     this.ffmpegProcess = spawn('ffmpeg', args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [this.capture === 'screencast' ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     });
+    // Screencast: a closed/full stdin (ffmpeg exits, meeting ends) must never crash the bot with EPIPE.
+    this.ffmpegProcess.stdin?.on('error', () => { /* EPIPE on shutdown — ignore */ });
     this.isRunning = true;
     this.startTime = Date.now();
 
@@ -100,8 +119,9 @@ export class VideoRecordingService {
 
       this.ffmpegProcess!.once('exit', onExit);
 
-      // SIGTERM tells ffmpeg to flush and finalize the output file
-      this.ffmpegProcess!.kill('SIGTERM');
+      // Screencast: EOF on stdin makes ffmpeg drain + finalize cleanly (no truncation). x11grab: SIGTERM.
+      if (this.capture === 'screencast') { try { this.ffmpegProcess!.stdin?.end(); } catch { /* already closed */ } }
+      else { this.ffmpegProcess!.kill('SIGTERM'); }
 
       // Force kill after 15 seconds if it doesn't exit cleanly
       const forceKillTimer = setTimeout(() => {
@@ -341,20 +361,22 @@ export class VideoRecordingService {
       }
     }
 
-    // Common input: x11grab from the virtual display
-    const inputArgs = [
-      '-f', 'x11grab',
-      '-draw_mouse', '0',
-      '-framerate', fps,
-      '-video_size', inputSize,
-      '-i', this.display,
-    ];
+    // Input: x11grab (framebuffer readback) OR screencast (concatenated JPEGs on stdin, each stamped
+    // by arrival wall-clock so real timing is preserved). Screencast skips the CUDA hwaccel decode —
+    // it's an encode-only path (h264_nvenc still applies via encoderArgs).
+    const inputArgs = this.capture === 'screencast'
+      ? ['-use_wallclock_as_timestamps', '1', '-f', 'mjpeg', '-i', 'pipe:0']
+      : ['-f', 'x11grab', '-draw_mouse', '0', '-framerate', fps, '-video_size', inputSize, '-i', this.display];
+    const pre = this.capture === 'screencast' ? [] : preInputArgs;
+    // Screencast frames are damage-driven (irregular); normalize to CFR so muxed A/V stays in sync.
+    const outputRate = this.capture === 'screencast' ? ['-r', fps] : [];
 
     return [
       '-y',         // overwrite output file if exists
-      ...preInputArgs,
+      ...pre,
       ...inputArgs,
       ...encoderArgs,
+      ...outputRate,
       '-an',        // no audio (audio is muxed in after recording stops)
       outputFile,
     ];

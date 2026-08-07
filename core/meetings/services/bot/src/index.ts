@@ -254,7 +254,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       // Server-side x11grab video capture (separate from the browser audio tap). Runs inside the
       // seam so it starts post-admission — on the live meeting, not the pre-join page.
       startVideoRecording: wantsVideoCapture(inv)
-        ? async () => startVideoRecording(inv, (m) => console.log(`[bot] ${m}`))
+        ? async () => startVideoRecording(inv, (m) => console.log(`[bot] ${m}`), sess.page)
         : undefined,
       engine: bp,
       onFault: (stage, e) => {

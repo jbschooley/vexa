@@ -508,6 +508,10 @@ async def request_bot(
         video_env["ENCODE_H264"] = os.environ["ENCODE_H264"]
     if os.getenv("VIDEO_RESOLUTION"):
         video_env["VIDEO_RESOLUTION"] = os.environ["VIDEO_RESOLUTION"]
+    # PROTOTYPE (proto/screencast-recording): VIDEO_CAPTURE=screencast switches the bot from ffmpeg
+    # x11grab (heavy framebuffer readback) to CDP compositor screencast → ffmpeg stdin. Default x11grab.
+    if os.getenv("VIDEO_CAPTURE"):
+        video_env["VIDEO_CAPTURE"] = os.environ["VIDEO_CAPTURE"]
 
     spec = build_workload_spec(
         workload_id=f"mtg-{meeting_id}-{connection_id[:8]}",
